@@ -28,10 +28,12 @@ def cargar_modelo():
     modelo.load_model("modelo_camote.cbm")
     return modelo
 
+
 @st.cache_data
 def cargar_json(nombre_archivo):
     with open(nombre_archivo, "r") as f:
         return json.load(f)
+
 
 modelo = cargar_modelo()
 columnas_modelo = cargar_json("columnas_modelo.json")
@@ -62,9 +64,15 @@ def obtener_columnas_riego(columnas):
 
 
 def aplicar_regla_riego(entrada):
+    """
+    Si Riego Etapa 1 o Riego Etapa 2 es 0,
+    la producción será 0.
+    """
+
     columnas_riego = obtener_columnas_riego(columnas_modelo)
 
     if len(columnas_riego) < 2:
+        st.error("No se encontraron correctamente las columnas de riego.")
         return False
 
     riego_1 = columnas_riego[0]
@@ -76,13 +84,30 @@ def aplicar_regla_riego(entrada):
     return False
 
 
+def aplicar_regla_mes(entrada, prediccion):
+    """
+    Si MesInicioPlantacion es 1, 2, 11 o 12,
+    la producción total no puede pasar de 100 quintales.
+    """
+
+    mes = int(entrada.get("MesInicioPlantacion", 0))
+
+    if mes in [1, 2, 11, 12]:
+        prediccion = min(prediccion, 100)
+        return prediccion, True
+
+    return prediccion, False
+
+
 def clasificar_produccion(prediccion):
     if prediccion >= 300:
         return "Producción alta estimada", "success"
     elif prediccion >= 200:
         return "Producción media estimada", "warning"
-    else:
+    elif prediccion > 0:
         return "Producción baja estimada", "error"
+    else:
+        return "Producción nula estimada", "error"
 
 
 # =========================================================
@@ -93,7 +118,7 @@ st.subheader("NEXARING")
 
 st.markdown(
     """
-    Esta aplicación estima la **Producción Total** de camote usando un modelo
+    Esta aplicación estima la **Producción Total de camote** usando un modelo 
     de inteligencia artificial basado en **CatBoost Regressor**.
     """
 )
@@ -108,11 +133,16 @@ with st.expander("📊 Ver métricas del modelo"):
     st.write(f"**RMSE:** {metricas['rmse']:.6f}")
 
 # =========================================================
-# REGLA AGRONÓMICA
+# REGLAS AGRONÓMICAS
 # =========================================================
 st.info(
-    "Regla aplicada: si Riego Etapa 1 o Riego Etapa 2 es 0, "
-    "la Producción Total será 0."
+    """
+    **Reglas aplicadas:**
+
+    1. Si **Riego Etapa 1** o **Riego Etapa 2** es **0**, la producción será **0 quintales**.
+
+    2. Si el mes de siembra es **1, 2, 11 o 12**, la producción máxima será **100 quintales**.
+    """
 )
 
 # =========================================================
@@ -152,14 +182,16 @@ st.markdown("---")
 col1, col2 = st.columns(2)
 
 with col1:
-    boton_predecir = st.button("🔍 Predecir producción", use_container_width=True)
+    boton_predecir = st.button(
+        "🔍 Predecir producción",
+        use_container_width=True
+    )
 
 with col2:
-    boton_valores_ideales = st.button("⭐ Valores ideales", use_container_width=True)
-
-# Nota:
-# En Streamlit los sliders ya inician en valores medios.
-# El botón Valores ideales se deja como referencia visual.
+    boton_valores_ideales = st.button(
+        "⭐ Valores ideales",
+        use_container_width=True
+    )
 
 if boton_valores_ideales:
     st.info(
@@ -174,16 +206,41 @@ if boton_predecir:
 
     entrada_df = pd.DataFrame([entrada_usuario], columns=columnas_modelo)
 
+    # Mostrar el mes seleccionado para comprobar la regla
+    if "MesInicioPlantacion" in entrada_usuario:
+        st.write("Mes seleccionado:", entrada_usuario["MesInicioPlantacion"])
+    else:
+        st.error("No se encontró la variable MesInicioPlantacion.")
+
+    # =====================================================
+    # REGLA 1: SI FALTA RIEGO EN ETAPA 1 O 2, PRODUCCIÓN = 0
+    # =====================================================
     if aplicar_regla_riego(entrada_usuario):
         prediccion = 0.0
+
         st.error("Producción nula estimada por falta de riego.")
-        st.metric("Predicción de Producción Total", f"{prediccion:.2f}")
+        st.warning("Riego Etapa 1 o Riego Etapa 2 está en 0.")
+        st.metric(
+            "Predicción de Producción Total",
+            f"{prediccion:.2f} quintales"
+        )
 
     else:
+        # =================================================
+        # PREDICCIÓN DEL MODELO
+        # =================================================
         prediccion = modelo.predict(entrada_df)[0]
 
         if prediccion < 0:
             prediccion = 0
+
+        # =================================================
+        # REGLA 2: MESES 1, 2, 11 Y 12 NO PASAN DE 100
+        # =================================================
+        prediccion, regla_mes_aplicada = aplicar_regla_mes(
+            entrada_usuario,
+            prediccion
+        )
 
         mensaje, tipo = clasificar_produccion(prediccion)
 
@@ -194,7 +251,16 @@ if boton_predecir:
         else:
             st.error(mensaje)
 
-        st.metric("Predicción de Producción Total", f"{prediccion:.2f}")
+        if regla_mes_aplicada:
+            st.warning(
+                "Se aplicó la regla del mes de siembra: "
+                "para los meses 1, 2, 11 o 12, la producción máxima permitida es 100 quintales."
+            )
+
+        st.metric(
+            "Predicción de Producción Total",
+            f"{prediccion:.2f} quintales"
+        )
 
 # =========================================================
 # INFORMACIÓN FINAL
