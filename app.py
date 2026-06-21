@@ -114,7 +114,7 @@ def clasificar_produccion(prediccion):
 # ENCABEZADO
 # =========================================================
 st.title("🌱 Sistema de Predicción de Producción de Camote")
-st.subheader("NEXARING")
+st.subheader("NEXARING-Data Science-UTM")
 
 st.markdown(
     """
@@ -127,23 +127,10 @@ st.markdown(
 # MÉTRICAS DEL MODELO
 # =========================================================
 with st.expander("📊 Ver métricas del modelo"):
-    st.write(f"**R² Score:** {metricas['r2']:.6f}")
-    st.write(f"**MAE:** {metricas['mae']:.6f}")
-    st.write(f"**MSE:** {metricas['mse']:.6f}")
-    st.write(f"**RMSE:** {metricas['rmse']:.6f}")
-
-# =========================================================
-# REGLAS AGRONÓMICAS
-# =========================================================
-st.info(
-    """
-    **Reglas aplicadas:**
-
-    1. Si **Riego Etapa 1** o **Riego Etapa 2** es **0**, la producción será **0 quintales**.
-
-    2. Si el mes de siembra es **1, 2, 11 o 12**, la producción máxima será **100 quintales**.
-    """
-)
+    st.write(f"**R² Score:** {metricas['r2']:.4f}")
+    st.write(f"**MAE:** {metricas['mae']:.4f}")
+    st.write(f"**MSE:** {metricas['mse']:.4f}")
+    st.write(f"**RMSE:** {metricas['rmse']:.4f}")
 
 # =========================================================
 # FORMULARIO DE ENTRADA
@@ -253,8 +240,7 @@ if boton_predecir:
 
         if regla_mes_aplicada:
             st.warning(
-                "Se aplicó la regla del mes de siembra: "
-                "para los meses 1, 2, 11 o 12, la producción máxima permitida es 100 quintales."
+                "La producción máxima permitida es 100 quintales."
             )
 
         st.metric(
