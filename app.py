@@ -16,7 +16,7 @@ from catboost import CatBoostRegressor
 # CONFIGURACIÓN GENERAL
 # =========================================================
 st.set_page_config(
-    page_title="NEXARING - Predicción de Camote",
+    page_title="NEXARING - Data Science - UTM",
     page_icon="🌱",
     layout="centered"
 )
@@ -278,8 +278,8 @@ for col in columnas_modelo:
 # =========================================================
 # ENCABEZADO
 # =========================================================
-st.title("🌱 Sistema de Predicción de Producción de Camote - Predicción de Camote")
-st.subheader("NEXARING")
+st.title("🌱 Sistema de Predicción de Producción de Camote - Data Science - UTM")
+st.subheader("NEXARING ")
 
 st.markdown(
     """
