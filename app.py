@@ -2,12 +2,14 @@
 # APP DE PREDICCIÓN DE PRODUCCIÓN DE CAMOTE
 # STREAMLIT + CATBOOST
 # SOLO VARIABLES ORIGINALES DEL DATASET
+# CON VALORES IDEALES AGRONÓMICOS Y GRÁFICO DINÁMICO
 # =========================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import json
+import plotly.graph_objects as go
 from catboost import CatBoostRegressor
 
 # =========================================================
@@ -39,6 +41,44 @@ modelo = cargar_modelo()
 columnas_modelo = cargar_json("columnas_modelo.json")
 rangos = cargar_json("rangos_variables.json")
 metricas = cargar_json("metricas_modelo.json")
+
+# =========================================================
+# VALORES IDEALES AGRONÓMICOS
+# SOLO VARIABLES EXISTENTES EN EL DATASET
+# =========================================================
+valores_ideales = {
+    "MesInicioPlantacion": 6,
+    "DuracionPlantacion_dias": 90,
+    "Temperatura_C": 26,
+    "Precipitacion_mm": 564,
+    "Humedad_porcentaje": 70,
+    "Fertilizante": 80,
+    "Riego_Etapa1_mm": 35,
+    "Riego_Etapa2_mm": 45,
+    "Riego_Etapa3_mm": 55,
+    "TipoSuelo": 1,
+    "pH_Suelo": 5.5,
+    "Altitud_msnm": 250
+}
+
+# =========================================================
+# RANGOS IDEALES AGRONÓMICOS
+# SOLO VARIABLES EXISTENTES EN EL DATASET
+# =========================================================
+rangos_ideales = {
+    "MesInicioPlantacion": [4, 9],
+    "DuracionPlantacion_dias": [90, 120],
+    "Temperatura_C": [18, 28],
+    "Precipitacion_mm": [400, 1000],
+    "Humedad_porcentaje": [50, 90],
+    "Fertilizante": [70, 90],
+    "Riego_Etapa1_mm": [20, 50],
+    "Riego_Etapa2_mm": [30, 60],
+    "Riego_Etapa3_mm": [40, 70],
+    "TipoSuelo": [1, 1],
+    "pH_Suelo": [5, 7.5],
+    "Altitud_msnm": [0, 500]
+}
 
 # =========================================================
 # FUNCIONES AUXILIARES
@@ -110,11 +150,147 @@ def clasificar_produccion(prediccion):
         return "Producción nula estimada", "error"
 
 
+def esta_en_rango_ideal(variable, valor):
+    """
+    Verifica si el valor seleccionado está dentro del rango ideal.
+    """
+
+    if variable not in rangos_ideales:
+        return False
+
+    minimo = rangos_ideales[variable][0]
+    maximo = rangos_ideales[variable][1]
+
+    return minimo <= valor <= maximo
+
+
+def normalizar_valor(variable, valor):
+    """
+    Convierte cada valor a escala 0-100 para poder graficar variables con unidades diferentes.
+    """
+
+    minimo = rangos[variable]["min"]
+    maximo = rangos[variable]["max"]
+
+    if maximo == minimo:
+        return 0
+
+    valor_normalizado = ((valor - minimo) / (maximo - minimo)) * 100
+
+    if valor_normalizado < 0:
+        valor_normalizado = 0
+
+    if valor_normalizado > 100:
+        valor_normalizado = 100
+
+    return valor_normalizado
+
+
+def crear_grafico_dinamico(entrada):
+    """
+    Crea gráfico dinámico:
+    - Línea verde: valores ideales.
+    - Barras azules: valores seleccionados dentro del rango ideal.
+    - Barras rojas: valores seleccionados fuera del rango ideal.
+    """
+
+    variables = []
+    valores_usuario_normalizados = []
+    valores_ideales_normalizados = []
+    colores_barras = []
+    textos_hover = []
+
+    for variable in columnas_modelo:
+        valor_usuario = entrada[variable]
+        valor_ideal = valores_ideales.get(variable, rangos[variable]["mean"])
+
+        usuario_norm = normalizar_valor(variable, valor_usuario)
+        ideal_norm = normalizar_valor(variable, valor_ideal)
+
+        variables.append(variable)
+        valores_usuario_normalizados.append(usuario_norm)
+        valores_ideales_normalizados.append(ideal_norm)
+
+        if esta_en_rango_ideal(variable, valor_usuario):
+            colores_barras.append("#2563eb")  # azul
+            estado = "Dentro del rango ideal"
+        else:
+            colores_barras.append("#dc2626")  # rojo
+            estado = "Fuera del rango ideal"
+
+        textos_hover.append(
+            f"Variable: {variable}<br>"
+            f"Valor seleccionado: {valor_usuario}<br>"
+            f"Valor ideal: {valor_ideal}<br>"
+            f"Estado: {estado}"
+        )
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=variables,
+            y=valores_usuario_normalizados,
+            name="Valores seleccionados",
+            marker_color=colores_barras,
+            text=[round(v, 1) for v in valores_usuario_normalizados],
+            hovertext=textos_hover,
+            hoverinfo="text"
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=variables,
+            y=valores_ideales_normalizados,
+            name="Valores ideales",
+            mode="lines+markers",
+            line=dict(color="#16a34a", width=4),
+            marker=dict(size=9, color="#16a34a")
+        )
+    )
+
+    fig.update_layout(
+        title="Comparación dinámica entre valores seleccionados e ideales",
+        xaxis_title="Variables del cultivo",
+        yaxis_title="Escala normalizada 0 - 100",
+        template="plotly_white",
+        height=600,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        )
+    )
+
+    fig.update_xaxes(tickangle=45)
+
+    return fig
+
+
+# =========================================================
+# INICIALIZAR VALORES DE SLIDERS
+# =========================================================
+for col in columnas_modelo:
+    if col not in st.session_state:
+        if col in valores_ideales:
+            valor_inicial = valores_ideales[col]
+        else:
+            valor_inicial = rangos[col]["mean"]
+
+        if es_variable_ph(col):
+            st.session_state[col] = float(round(valor_inicial, 1))
+        else:
+            st.session_state[col] = int(round(valor_inicial))
+
+
 # =========================================================
 # ENCABEZADO
 # =========================================================
 st.title("🌱 Sistema de Predicción de Producción de Camote")
-st.subheader("NEXARING-Data Science-UTM")
+st.subheader("NEXARING - Data Science - UTM")
 
 st.markdown(
     """
@@ -133,58 +309,104 @@ with st.expander("📊 Ver métricas del modelo"):
     st.write(f"**RMSE:** {metricas['rmse']:.4f}")
 
 # =========================================================
+# REGLAS AGRONÓMICAS
+# =========================================================
+st.info(
+    """
+    **Reglas aplicadas:**
+
+    1. Si **Riego Etapa 1** o **Riego Etapa 2** es **0**, la producción será **0 quintales**.
+
+    2. Si el mes de siembra es **1, 2, 11 o 12**, la producción máxima será **100 quintales**.
+
+    3. Los valores ideales se basan en condiciones agronómicas recomendadas para el cultivo de camote en Portoviejo.
+    """
+)
+
+# =========================================================
+# BOTÓN VALORES IDEALES
+# =========================================================
+if st.button("⭐ Cargar valores ideales", use_container_width=True):
+    for col in columnas_modelo:
+        if col in valores_ideales:
+            if es_variable_ph(col):
+                st.session_state[col] = float(valores_ideales[col])
+            else:
+                st.session_state[col] = int(round(valores_ideales[col]))
+
+    st.success("Se cargaron los valores ideales agronómicos.")
+    st.rerun()
+
+# =========================================================
 # FORMULARIO DE ENTRADA
 # =========================================================
-st.markdown("## Ingrese los valores")
+st.markdown("## Ingrese o ajuste los valores")
 
 entrada_usuario = {}
 
 for col in columnas_modelo:
     valor_min = rangos[col]["min"]
     valor_max = rangos[col]["max"]
-    valor_mean = rangos[col]["mean"]
 
     if es_variable_ph(col):
         entrada_usuario[col] = st.slider(
             label=col,
             min_value=float(valor_min),
             max_value=float(valor_max),
-            value=float(round(valor_mean, 1)),
-            step=0.1
+            value=float(st.session_state[col]),
+            step=0.1,
+            key=col
         )
     else:
         entrada_usuario[col] = st.slider(
             label=col,
             min_value=int(round(valor_min)),
             max_value=int(round(valor_max)),
-            value=int(round(valor_mean)),
-            step=1
+            value=int(round(st.session_state[col])),
+            step=1,
+            key=col
         )
 
 # =========================================================
-# BOTONES
+# TABLA DE VALORES IDEALES
+# =========================================================
+with st.expander("🌿 Ver valores ideales usados"):
+    tabla_ideales = []
+
+    for variable in columnas_modelo:
+        ideal = valores_ideales.get(variable, rangos[variable]["mean"])
+        rango_ideal = rangos_ideales.get(variable, ["No definido", "No definido"])
+
+        tabla_ideales.append({
+            "Variable": variable,
+            "Valor ideal": ideal,
+            "Rango ideal mínimo": rango_ideal[0],
+            "Rango ideal máximo": rango_ideal[1]
+        })
+
+    st.dataframe(pd.DataFrame(tabla_ideales), use_container_width=True)
+
+# =========================================================
+# GRÁFICO DINÁMICO
+# =========================================================
+st.markdown("## 📊 Gráfico dinámico de comparación")
+
+fig = crear_grafico_dinamico(entrada_usuario)
+st.plotly_chart(fig, use_container_width=True)
+
+st.caption(
+    "Nota: el gráfico usa una escala normalizada de 0 a 100 porque las variables tienen unidades diferentes."
+)
+
+# =========================================================
+# BOTÓN DE PREDICCIÓN
 # =========================================================
 st.markdown("---")
 
-col1, col2 = st.columns(2)
-
-with col1:
-    boton_predecir = st.button(
-        "🔍 Predecir producción",
-        use_container_width=True
-    )
-
-with col2:
-    boton_valores_ideales = st.button(
-        "⭐ Valores ideales",
-        use_container_width=True
-    )
-
-if boton_valores_ideales:
-    st.info(
-        "Los valores iniciales de las barras ya corresponden a los valores promedio del dataset. "
-        "Para volver a ellos, actualice la página."
-    )
+boton_predecir = st.button(
+    "🔍 Predecir producción",
+    use_container_width=True
+)
 
 # =========================================================
 # PREDICCIÓN
@@ -193,7 +415,6 @@ if boton_predecir:
 
     entrada_df = pd.DataFrame([entrada_usuario], columns=columnas_modelo)
 
-    # Mostrar el mes seleccionado para comprobar la regla
     if "MesInicioPlantacion" in entrada_usuario:
         st.write("Mes seleccionado:", entrada_usuario["MesInicioPlantacion"])
     else:
@@ -240,7 +461,8 @@ if boton_predecir:
 
         if regla_mes_aplicada:
             st.warning(
-                "La producción máxima permitida es 100 quintales."
+                "Se aplicó la regla del mes de siembra: "
+                "para los meses 1, 2, 11 o 12, la producción máxima permitida es 100 quintales."
             )
 
         st.metric(
