@@ -278,7 +278,7 @@ for col in columnas_modelo:
 # =========================================================
 # ENCABEZADO
 # =========================================================
-st.title("🌱 Sistema de Predicción de Producción de Camote")
+st.title("🌱 Sistema de Predicción de Producción de Camote - Predicción de Camote")
 st.subheader("NEXARING")
 
 st.markdown(
@@ -292,10 +292,10 @@ st.markdown(
 # MÉTRICAS DEL MODELO
 # =========================================================
 with st.expander("📊 Ver métricas del modelo"):
-    st.write(f"**R² Score:** {metricas['r2']:.6f}")
-    st.write(f"**MAE:** {metricas['mae']:.6f}")
-    st.write(f"**MSE:** {metricas['mse']:.6f}")
-    st.write(f"**RMSE:** {metricas['rmse']:.6f}")
+    st.write(f"**R² Score:** {metricas['r2']:.4f}")
+    st.write(f"**MAE:** {metricas['mae']:.4f}")
+    st.write(f"**MSE:** {metricas['mse']:.4f}")
+    st.write(f"**RMSE:** {metricas['rmse']:.4f}")
 
 # =========================================================
 # BOTONES SUPERIORES
