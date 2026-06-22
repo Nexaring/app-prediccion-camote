@@ -3,3 +3,4 @@ catboost
 pandas
 numpy
 scikit-learn
+plotly
