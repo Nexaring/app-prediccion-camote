@@ -1,7 +1,7 @@
 # =========================================================
 # APP DE PREDICCIÓN DE PRODUCCIÓN DE CAMOTE
 # STREAMLIT + CATBOOST
-# SOLO VARIABLES ORIGINALES DEL DATASET
+# NEXARING
 # CON VALORES IDEALES AGRONÓMICOS Y GRÁFICO DINÁMICO
 # =========================================================
 
@@ -44,7 +44,6 @@ metricas = cargar_json("metricas_modelo.json")
 
 # =========================================================
 # VALORES IDEALES AGRONÓMICOS
-# SOLO VARIABLES EXISTENTES EN EL DATASET
 # =========================================================
 valores_ideales = {
     "MesInicioPlantacion": 6,
@@ -63,7 +62,6 @@ valores_ideales = {
 
 # =========================================================
 # RANGOS IDEALES AGRONÓMICOS
-# SOLO VARIABLES EXISTENTES EN EL DATASET
 # =========================================================
 rangos_ideales = {
     "MesInicioPlantacion": [4, 9],
@@ -85,21 +83,14 @@ rangos_ideales = {
 # =========================================================
 def es_variable_ph(col):
     nombre = col.lower()
-
-    return (
-        nombre == "ph_suelo" or
-        nombre == "phsuelo" or
-        "ph" in nombre
-    )
+    return nombre == "ph_suelo" or nombre == "phsuelo" or "ph" in nombre
 
 
 def obtener_columnas_riego(columnas):
     columnas_riego = []
-
     for col in columnas:
         if "riego" in col.lower():
             columnas_riego.append(col)
-
     return columnas_riego
 
 
@@ -151,10 +142,6 @@ def clasificar_produccion(prediccion):
 
 
 def esta_en_rango_ideal(variable, valor):
-    """
-    Verifica si el valor seleccionado está dentro del rango ideal.
-    """
-
     if variable not in rangos_ideales:
         return False
 
@@ -166,7 +153,7 @@ def esta_en_rango_ideal(variable, valor):
 
 def normalizar_valor(variable, valor):
     """
-    Convierte cada valor a escala 0-100 para poder graficar variables con unidades diferentes.
+    Convierte cada valor a escala 0-100 para graficar variables con unidades distintas.
     """
 
     minimo = rangos[variable]["min"]
@@ -212,10 +199,10 @@ def crear_grafico_dinamico(entrada):
         valores_ideales_normalizados.append(ideal_norm)
 
         if esta_en_rango_ideal(variable, valor_usuario):
-            colores_barras.append("#2563eb")  # azul
+            colores_barras.append("#2563eb")
             estado = "Dentro del rango ideal"
         else:
-            colores_barras.append("#dc2626")  # rojo
+            colores_barras.append("#dc2626")
             estado = "Fuera del rango ideal"
 
         textos_hover.append(
@@ -271,26 +258,28 @@ def crear_grafico_dinamico(entrada):
 
 
 # =========================================================
-# INICIALIZAR VALORES DE SLIDERS
+# INICIALIZAR VALORES DE LOS SLIDERS
 # =========================================================
 for col in columnas_modelo:
-    if col not in st.session_state:
+    key_slider = f"slider_{col}"
+
+    if key_slider not in st.session_state:
         if col in valores_ideales:
             valor_inicial = valores_ideales[col]
         else:
             valor_inicial = rangos[col]["mean"]
 
         if es_variable_ph(col):
-            st.session_state[col] = float(round(valor_inicial, 1))
+            st.session_state[key_slider] = float(round(valor_inicial, 1))
         else:
-            st.session_state[col] = int(round(valor_inicial))
+            st.session_state[key_slider] = int(round(valor_inicial))
 
 
 # =========================================================
 # ENCABEZADO
 # =========================================================
 st.title("🌱 Sistema de Predicción de Producción de Camote")
-st.subheader("NEXARING - Data Science - UTM")
+st.subheader("NEXARING")
 
 st.markdown(
     """
@@ -303,38 +292,59 @@ st.markdown(
 # MÉTRICAS DEL MODELO
 # =========================================================
 with st.expander("📊 Ver métricas del modelo"):
-    st.write(f"**R² Score:** {metricas['r2']:.4f}")
-    st.write(f"**MAE:** {metricas['mae']:.4f}")
-    st.write(f"**MSE:** {metricas['mse']:.4f}")
-    st.write(f"**RMSE:** {metricas['rmse']:.4f}")
+    st.write(f"**R² Score:** {metricas['r2']:.6f}")
+    st.write(f"**MAE:** {metricas['mae']:.6f}")
+    st.write(f"**MSE:** {metricas['mse']:.6f}")
+    st.write(f"**RMSE:** {metricas['rmse']:.6f}")
 
 # =========================================================
-# REGLAS AGRONÓMICAS
+# BOTONES SUPERIORES
 # =========================================================
-st.info(
-    """
-    **Reglas aplicadas:**
+st.markdown("## Controles rápidos")
 
-    1. Si **Riego Etapa 1** o **Riego Etapa 2** es **0**, la producción será **0 quintales**.
+col_boton_1, col_boton_2 = st.columns(2)
 
-    2. Si el mes de siembra es **1, 2, 11 o 12**, la producción máxima será **100 quintales**.
+with col_boton_1:
+    boton_valores_ideales = st.button(
+        "⭐ Valores ideales",
+        use_container_width=True
+    )
 
-    3. Los valores ideales se basan en condiciones agronómicas recomendadas para el cultivo de camote en Portoviejo.
-    """
-)
+with col_boton_2:
+    boton_reiniciar_promedios = st.button(
+        "🔄 Promedios del dataset",
+        use_container_width=True
+    )
 
-# =========================================================
-# BOTÓN VALORES IDEALES
-# =========================================================
-if st.button("⭐ Cargar valores ideales", use_container_width=True):
+if boton_valores_ideales:
     for col in columnas_modelo:
+        key_slider = f"slider_{col}"
+
         if col in valores_ideales:
-            if es_variable_ph(col):
-                st.session_state[col] = float(valores_ideales[col])
-            else:
-                st.session_state[col] = int(round(valores_ideales[col]))
+            valor = valores_ideales[col]
+        else:
+            valor = rangos[col]["mean"]
+
+        if es_variable_ph(col):
+            st.session_state[key_slider] = float(round(valor, 1))
+        else:
+            st.session_state[key_slider] = int(round(valor))
 
     st.success("Se cargaron los valores ideales agronómicos.")
+    st.rerun()
+
+if boton_reiniciar_promedios:
+    for col in columnas_modelo:
+        key_slider = f"slider_{col}"
+
+        valor = rangos[col]["mean"]
+
+        if es_variable_ph(col):
+            st.session_state[key_slider] = float(round(valor, 1))
+        else:
+            st.session_state[key_slider] = int(round(valor))
+
+    st.info("Se cargaron los valores promedio del dataset.")
     st.rerun()
 
 # =========================================================
@@ -348,23 +358,25 @@ for col in columnas_modelo:
     valor_min = rangos[col]["min"]
     valor_max = rangos[col]["max"]
 
+    key_slider = f"slider_{col}"
+
     if es_variable_ph(col):
         entrada_usuario[col] = st.slider(
             label=col,
             min_value=float(valor_min),
             max_value=float(valor_max),
-            value=float(st.session_state[col]),
+            value=float(st.session_state[key_slider]),
             step=0.1,
-            key=col
+            key=key_slider
         )
     else:
         entrada_usuario[col] = st.slider(
             label=col,
             min_value=int(round(valor_min)),
             max_value=int(round(valor_max)),
-            value=int(round(st.session_state[col])),
+            value=int(st.session_state[key_slider]),
             step=1,
-            key=col
+            key=key_slider
         )
 
 # =========================================================
