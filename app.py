@@ -474,7 +474,6 @@ if boton_predecir:
         if regla_mes_aplicada:
             st.warning(
                 "Se aplicó la regla del mes de siembra: "
-                "para los meses 1, 2, 11 o 12, la producción máxima permitida es 100 quintales."
             )
 
         st.metric(
