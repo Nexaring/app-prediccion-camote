@@ -179,13 +179,30 @@ def crear_grafico_dinamico(entrada):
     - Línea verde: valores ideales.
     - Barras con colores distintos: valores seleccionados dentro del rango ideal.
     - Barras rojas: valores seleccionados fuera del rango ideal.
+    - Las barras muestran el valor real ingresado por el usuario.
     """
 
     variables = []
+    valores_usuario = []
     valores_usuario_normalizados = []
     valores_ideales_normalizados = []
     colores_barras = []
     textos_hover = []
+
+    colores_ideales = {
+        "MesInicioPlantacion": "#2563eb",
+        "DuracionPlantacion_dias": "#16a34a",
+        "Temperatura_C": "#9333ea",
+        "Precipitacion_mm": "#f59e0b",
+        "Humedad_porcentaje": "#0d9488",
+        "Fertilizante": "#db2777",
+        "Riego_Etapa1_mm": "#4f46e5",
+        "Riego_Etapa2_mm": "#84cc16",
+        "Riego_Etapa3_mm": "#0891b2",
+        "TipoSuelo": "#ea580c",
+        "pH_Suelo": "#7c3aed",
+        "Altitud_msnm": "#059669"
+    }
 
     for variable in columnas_modelo:
         valor_usuario = entrada[variable]
@@ -195,23 +212,9 @@ def crear_grafico_dinamico(entrada):
         ideal_norm = normalizar_valor(variable, valor_ideal)
 
         variables.append(variable)
+        valores_usuario.append(valor_usuario)
         valores_usuario_normalizados.append(usuario_norm)
         valores_ideales_normalizados.append(ideal_norm)
-
-        colores_ideales = {
-            "MesInicioPlantacion": "#2563eb",
-            "DuracionPlantacion_dias": "#16a34a",
-            "Temperatura_C": "#9333ea",
-            "Precipitacion_mm": "#f59e0b",
-            "Humedad_porcentaje": "#0d9488",
-            "Fertilizante": "#db2777",
-            "Riego_Etapa1_mm": "#4f46e5",
-            "Riego_Etapa2_mm": "#84cc16",
-            "Riego_Etapa3_mm": "#0891b2",
-            "TipoSuelo": "#ea580c",
-            "pH_Suelo": "#7c3aed",
-            "Altitud_msnm": "#059669"
-        }
 
         if esta_en_rango_ideal(variable, valor_usuario):
             colores_barras.append(colores_ideales.get(variable, "#2563eb"))
@@ -235,7 +238,8 @@ def crear_grafico_dinamico(entrada):
             y=valores_usuario_normalizados,
             name="Valores seleccionados",
             marker_color=colores_barras,
-            text=[round(v, 1) for v in valores_usuario_normalizados],
+            text=valores_usuario,
+            textposition="outside",
             hovertext=textos_hover,
             hoverinfo="text"
         )
@@ -422,7 +426,8 @@ fig = crear_grafico_dinamico(entrada_usuario)
 st.plotly_chart(fig, use_container_width=True)
 
 st.caption(
-    "Nota: el gráfico usa una escala normalizada de 0 a 100 porque las variables tienen unidades diferentes."
+    "Nota: el gráfico usa una escala normalizada de 0 a 100 porque las variables tienen unidades diferentes. "
+    "Los números sobre las barras corresponden a los valores reales ingresados."
 )
 
 # =========================================================
