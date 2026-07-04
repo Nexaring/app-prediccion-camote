@@ -88,11 +88,9 @@ def es_variable_ph(col):
 
 def obtener_columnas_riego(columnas):
     columnas_riego = []
-
     for col in columnas:
         if "riego" in col.lower():
             columnas_riego.append(col)
-
     return columnas_riego
 
 
@@ -178,9 +176,9 @@ def normalizar_valor(variable, valor):
 def crear_grafico_dinamico(entrada):
     """
     Crea gráfico dinámico:
-    - Cada barra dentro del rango ideal tiene un color diferente.
-    - Las barras fuera del rango ideal se muestran en rojo.
     - Línea verde: valores ideales.
+    - Barras con colores distintos: valores seleccionados dentro del rango ideal.
+    - Barras rojas: valores seleccionados fuera del rango ideal.
     """
 
     variables = []
@@ -189,26 +187,7 @@ def crear_grafico_dinamico(entrada):
     colores_barras = []
     textos_hover = []
 
-    # Paleta de colores para variables dentro del rango ideal
-    paleta_colores = [
-        "#2563eb",  # azul
-        "#16a34a",  # verde
-        "#9333ea",  # morado
-        "#f59e0b",  # amarillo/naranja
-        "#0d9488",  # turquesa
-        "#db2777",  # rosado
-        "#4f46e5",  # índigo
-        "#84cc16",  # verde lima
-        "#0891b2",  # cyan
-        "#ea580c",  # naranja fuerte
-        "#7c3aed",  # violeta
-        "#059669",  # verde esmeralda
-        "#0284c7",  # azul cielo
-        "#ca8a04",  # dorado
-        "#be185d"   # fucsia oscuro
-    ]
-
-    for i, variable in enumerate(columnas_modelo):
+    for variable in columnas_modelo:
         valor_usuario = entrada[variable]
         valor_ideal = valores_ideales.get(variable, rangos[variable]["mean"])
 
@@ -219,9 +198,23 @@ def crear_grafico_dinamico(entrada):
         valores_usuario_normalizados.append(usuario_norm)
         valores_ideales_normalizados.append(ideal_norm)
 
+        colores_ideales = {
+            "MesInicioPlantacion": "#2563eb",
+            "DuracionPlantacion_dias": "#16a34a",
+            "Temperatura_C": "#9333ea",
+            "Precipitacion_mm": "#f59e0b",
+            "Humedad_porcentaje": "#0d9488",
+            "Fertilizante": "#db2777",
+            "Riego_Etapa1_mm": "#4f46e5",
+            "Riego_Etapa2_mm": "#84cc16",
+            "Riego_Etapa3_mm": "#0891b2",
+            "TipoSuelo": "#ea580c",
+            "pH_Suelo": "#7c3aed",
+            "Altitud_msnm": "#059669"
+        }
+
         if esta_en_rango_ideal(variable, valor_usuario):
-            color_variable = paleta_colores[i % len(paleta_colores)]
-            colores_barras.append(color_variable)
+            colores_barras.append(colores_ideales.get(variable, "#2563eb"))
             estado = "Dentro del rango ideal"
         else:
             colores_barras.append("#dc2626")
@@ -301,7 +294,7 @@ for col in columnas_modelo:
 # ENCABEZADO
 # =========================================================
 st.title("🌱 Sistema de Predicción de Producción de Camote - Data Science - UTM")
-st.subheader("NEXARING")
+st.subheader("NEXARING ")
 
 st.markdown(
     """
@@ -429,8 +422,7 @@ fig = crear_grafico_dinamico(entrada_usuario)
 st.plotly_chart(fig, use_container_width=True)
 
 st.caption(
-    "Nota: el gráfico usa una escala normalizada de 0 a 100 porque las variables tienen unidades diferentes. "
-    "Las barras en rojo indican valores fuera del rango ideal."
+    "Nota: el gráfico usa una escala normalizada de 0 a 100 porque las variables tienen unidades diferentes."
 )
 
 # =========================================================
@@ -496,8 +488,7 @@ if boton_predecir:
 
         if regla_mes_aplicada:
             st.warning(
-                "Se aplicó la regla del mes de siembra: para los meses 1, 2, 11 y 12 "
-                "la producción estimada no puede superar los 100 quintales."
+                "Se aplicó la regla del mes de siembra: "
             )
 
         st.metric(
