@@ -16,7 +16,7 @@ from catboost import CatBoostRegressor
 # CONFIGURACIÓN GENERAL
 # =========================================================
 st.set_page_config(
-    page_title="NEXARING - Data Science - UTM",
+    page_title="Prototipo para la estimación predictiva de producción de camote",
     page_icon="🌱",
     layout="centered"
 )
@@ -43,6 +43,30 @@ rangos = cargar_json("rangos_variables.json")
 metricas = cargar_json("metricas_modelo.json")
 
 # =========================================================
+# NOMBRES AMIGABLES PARA MOSTRAR AL USUARIO
+# (Los nombres técnicos internos NO cambian, solo la etiqueta visible)
+# =========================================================
+nombres_amigables = {
+    "MesInicioPlantacion": "Mes de inicio de plantación",
+    "DuracionPlantacion_dias": "Duración del cultivo",
+    "Fertilizante": "Fertilizante",
+    "Riego_Etapa1_mm": "Riego en etapa inicial",
+    "Riego_Etapa2_mm": "Riego en etapa intermedia",
+    "Riego_Etapa3_mm": "Riego en etapa final",
+    "Temperatura_C": "Temperatura media",
+    "Precipitacion_mm": "Precipitación acumulada",
+    "Humedad_porcentaje": "Humedad relativa",
+    "Altitud_msnm": "Altitud del terreno",
+    "TipoSuelo": "Tipo de suelo",
+    "pH_Suelo": "pH del suelo"
+}
+
+
+def obtener_nombre_amigable(col):
+    return nombres_amigables.get(col, col)
+
+
+# =========================================================
 # VALORES IDEALES AGRONÓMICOS
 # =========================================================
 valores_ideales = {
@@ -56,7 +80,7 @@ valores_ideales = {
     "Riego_Etapa2_mm": 45,
     "Riego_Etapa3_mm": 55,
     "TipoSuelo": 1,
-    "pH_Suelo": 5.5,
+    "pH_Suelo": 6,
     "Altitud_msnm": 250
 }
 
@@ -74,7 +98,7 @@ rangos_ideales = {
     "Riego_Etapa2_mm": [30, 60],
     "Riego_Etapa3_mm": [40, 70],
     "TipoSuelo": [1, 1],
-    "pH_Suelo": [5, 7.5],
+    "pH_Suelo": [5.5, 7.5],
     "Altitud_msnm": [0, 500]
 }
 
@@ -211,7 +235,9 @@ def crear_grafico_dinamico(entrada):
         usuario_norm = normalizar_valor(variable, valor_usuario)
         ideal_norm = normalizar_valor(variable, valor_ideal)
 
-        variables.append(variable)
+        nombre_visible = obtener_nombre_amigable(variable)
+
+        variables.append(nombre_visible)
         valores_usuario.append(valor_usuario)
         valores_usuario_normalizados.append(usuario_norm)
         valores_ideales_normalizados.append(ideal_norm)
@@ -224,7 +250,7 @@ def crear_grafico_dinamico(entrada):
             estado = "Fuera del rango ideal"
 
         textos_hover.append(
-            f"Variable: {variable}<br>"
+            f"Variable: {nombre_visible}<br>"
             f"Valor seleccionado: {valor_usuario}<br>"
             f"Valor ideal: {valor_ideal}<br>"
             f"Estado: {estado}"
@@ -297,12 +323,12 @@ for col in columnas_modelo:
 # =========================================================
 # ENCABEZADO
 # =========================================================
-st.title("🌱 Sistema de Predicción de Producción de Camote - Data Science - UTM")
+st.title("🌱 Prototipo para la estimación predictiva de producción de camote")
 st.subheader("NEXARING ")
 
 st.markdown(
     """
-    Esta aplicación estima la **Producción Total de camote** usando un modelo 
+    Esta aplicación estima la **Producción de camote** usando un modelo 
     de inteligencia artificial basado en **CatBoost Regressor**.
     """
 )
@@ -378,10 +404,11 @@ for col in columnas_modelo:
     valor_max = rangos[col]["max"]
 
     key_slider = f"slider_{col}"
+    etiqueta = obtener_nombre_amigable(col)
 
     if es_variable_ph(col):
         entrada_usuario[col] = st.slider(
-            label=col,
+            label=etiqueta,
             min_value=float(valor_min),
             max_value=float(valor_max),
             value=float(st.session_state[key_slider]),
@@ -390,7 +417,7 @@ for col in columnas_modelo:
         )
     else:
         entrada_usuario[col] = st.slider(
-            label=col,
+            label=etiqueta,
             min_value=int(round(valor_min)),
             max_value=int(round(valor_max)),
             value=int(st.session_state[key_slider]),
@@ -409,7 +436,7 @@ with st.expander("🌿 Ver valores ideales usados"):
         rango_ideal = rangos_ideales.get(variable, ["No definido", "No definido"])
 
         tabla_ideales.append({
-            "Variable": variable,
+            "Variable": obtener_nombre_amigable(variable),
             "Valor ideal": ideal,
             "Rango ideal mínimo": rango_ideal[0],
             "Rango ideal máximo": rango_ideal[1]
@@ -450,7 +477,7 @@ if boton_predecir:
     if "MesInicioPlantacion" in entrada_usuario:
         st.write("Mes seleccionado:", entrada_usuario["MesInicioPlantacion"])
     else:
-        st.error("No se encontró la variable MesInicioPlantacion.")
+        st.error("No se encontró la variable Mes de inicio de plantación.")
 
     # =====================================================
     # REGLA 1: SI FALTA RIEGO EN ETAPA 1 O 2, PRODUCCIÓN = 0
@@ -459,9 +486,9 @@ if boton_predecir:
         prediccion = 0.0
 
         st.error("Producción nula estimada por falta de riego.")
-        st.warning("Riego Etapa 1 o Riego Etapa 2 está en 0.")
+        st.warning("Riego en etapa inicial o Riego en etapa intermedia está en 0.")
         st.metric(
-            "Predicción de Producción Total",
+            "Producción de camote",
             f"{prediccion:.2f} quintales"
         )
 
@@ -494,10 +521,11 @@ if boton_predecir:
         if regla_mes_aplicada:
             st.warning(
                 "Se aplicó la regla del mes de siembra: "
+                "para los meses 1, 2, 11 o 12, la producción máxima permitida es 100 quintales."
             )
 
         st.metric(
-            "Predicción de Producción Total",
+            "Producción de camote",
             f"{prediccion:.2f} quintales"
         )
 
