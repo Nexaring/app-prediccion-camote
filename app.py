@@ -99,7 +99,7 @@ rangos_ideales = {
     "Riego_Etapa3_mm": [40, 70],
     "TipoSuelo": [1, 1],
     "pH_Suelo": [5.5, 7.5],
-    "Altitud_msnm": [0, 500]
+    "Altitud_msnm": [0, 1500]
 }
 
 # =========================================================
