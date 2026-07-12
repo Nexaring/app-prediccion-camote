@@ -315,6 +315,8 @@ for col in columnas_modelo:
             valor_inicial = rangos[col]["mean"]
 
         if es_variable_ph(col):
+            # Aseguramos que el valor inicial esté dentro del rango fijo 5.5 - 7.5
+            valor_inicial = max(5.5, min(valor_inicial, 7.5))
             st.session_state[key_slider] = float(round(valor_inicial, 1))
         else:
             st.session_state[key_slider] = int(round(valor_inicial))
@@ -371,6 +373,7 @@ if boton_valores_ideales:
             valor = rangos[col]["mean"]
 
         if es_variable_ph(col):
+            valor = max(5.5, min(valor, 7.5))
             st.session_state[key_slider] = float(round(valor, 1))
         else:
             st.session_state[key_slider] = int(round(valor))
@@ -385,6 +388,8 @@ if boton_reiniciar_promedios:
         valor = rangos[col]["mean"]
 
         if es_variable_ph(col):
+            # Aseguramos que el promedio no salga del rango fijo 5.5 - 7.5
+            valor = max(5.5, min(valor, 7.5))
             st.session_state[key_slider] = float(round(valor, 1))
         else:
             st.session_state[key_slider] = int(round(valor))
@@ -400,13 +405,22 @@ st.markdown("## Ingrese o ajuste los valores")
 entrada_usuario = {}
 
 for col in columnas_modelo:
-    valor_min = rangos[col]["min"]
-    valor_max = rangos[col]["max"]
-
     key_slider = f"slider_{col}"
     etiqueta = obtener_nombre_amigable(col)
 
     if es_variable_ph(col):
+        # =================================================
+        # RANGO FIJO PARA pH DEL SUELO: 5.5 a 7.5
+        # =================================================
+        valor_min = 5.5
+        valor_max = 7.5
+
+        # Si el valor guardado está fuera del nuevo rango, se ajusta
+        valor_actual = st.session_state[key_slider]
+        if valor_actual < valor_min or valor_actual > valor_max:
+            valor_actual = valores_ideales.get(col, 6)
+            st.session_state[key_slider] = float(valor_actual)
+
         entrada_usuario[col] = st.slider(
             label=etiqueta,
             min_value=float(valor_min),
@@ -416,6 +430,9 @@ for col in columnas_modelo:
             key=key_slider
         )
     else:
+        valor_min = rangos[col]["min"]
+        valor_max = rangos[col]["max"]
+
         entrada_usuario[col] = st.slider(
             label=etiqueta,
             min_value=int(round(valor_min)),
