@@ -455,8 +455,8 @@ with st.expander("🌿 Ver valores ideales usados"):
         tabla_ideales.append({
             "Variable": obtener_nombre_amigable(variable),
             "Valor ideal": ideal,
-            "Rango ideal mínimo": rango_ideal[0],
-            "Rango ideal máximo": rango_ideal[1]
+            "Mínimo": rango_ideal[0],
+            "Máximo": rango_ideal[1]
         })
 
     st.dataframe(pd.DataFrame(tabla_ideales), use_container_width=True)
