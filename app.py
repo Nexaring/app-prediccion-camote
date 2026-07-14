@@ -88,17 +88,17 @@ valores_ideales = {
 # RANGOS IDEALES AGRONÓMICOS
 # =========================================================
 rangos_ideales = {
-    "MesInicioPlantacion": [4, 9],
-    "DuracionPlantacion_dias": [90, 120],
-    "Temperatura_C": [18, 28],
-    "Precipitacion_mm": [400, 1000],
-    "Humedad_porcentaje": [50, 90],
-    "Fertilizante": [70, 90],
-    "Riego_Etapa1_mm": [20, 50],
-    "Riego_Etapa2_mm": [30, 60],
-    "Riego_Etapa3_mm": [40, 70],
-    "TipoSuelo": [1, 1],
-    "pH_Suelo": [5.5, 7.5],
+    "MesInicioPlantacion": [1, 12],
+    "DuracionPlantacion_dias": [60, 120],
+    "Temperatura_C": [10, 40],
+    "Precipitacion_mm": [200, 1200],
+    "Humedad_porcentaje": [20, 100],
+    "Fertilizante": [0, 100],
+    "Riego_Etapa1_mm": [0, 60],
+    "Riego_Etapa2_mm": [0, 70],
+    "Riego_Etapa3_mm": [0, 80],
+    "TipoSuelo": [1, 3],
+    "pH_Suelo": [4, 6],
     "Altitud_msnm": [0, 1500]
 }
 
