@@ -2,5 +2,6 @@ streamlit
 catboost
 pandas
 numpy
-scikit-learn
 plotly
+requests
+streamlit-geolocation
