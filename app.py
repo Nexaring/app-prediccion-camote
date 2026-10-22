@@ -1,927 +1,412 @@
-# =========================================================
-# APP DE PREDICCIÓN DE PRODUCCIÓN DE CAMOTE
-# STREAMLIT + CATBOOST
-# VERSIÓN CORREGIDA PARA MODELO ENTRENADO CON DATOS NORMALIZADOS
-# =========================================================
+# =====================================================================
+# PROTOTIPO: ESTIMACIÓN DE LA PRODUCCIÓN DE CAMOTE (kg/ha)
+# Tesis: "Modelo de simulación para la estimación de producción de camote
+#         en Portoviejo a partir de rangos agronómicos definidos"
+# Autor: Ing. Néxar Bolívar Lucas Ostaiza — UTM, Facultad de Posgrado
+# Modelo: CatBoost (Categorical Boosting), entrenado como en la tesis
+# =====================================================================
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
-import plotly.graph_objects as go
 from catboost import CatBoostRegressor
-from streamlit_geolocation import streamlit_geolocation
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from streamlit_js_eval import get_geolocation
 
+st.set_page_config(page_title="Producción de camote", page_icon="🍠", layout="wide")
 
-# =========================================================
-# 1. CONFIGURACIÓN
-# =========================================================
+CARPETA = Path(__file__).resolve().parent
+ARCHIVO_DATOS = CARPETA / "DataGauss_Normalizada.csv"   # datos estandarizados (escenario B)
+ARCHIVO_ESCALA = CARPETA / "escala_datos.json"           # media y desviación del dataset original
 
-st.set_page_config(
-    page_title="Predicción de producción de camote",
-    page_icon="🌱",
-    layout="centered"
-)
+PORTOVIEJO = {"lat": -1.0546, "lon": -80.4545, "nombre": "Portoviejo, Manabí (predeterminado)"}
+DIAS_PRECIPITACION = 90  # duración ideal del cultivo: la lluvia se acumula en los últimos 90 días
 
-BASE_DIR = Path(__file__).resolve().parent
-
-MODELO_FILE = BASE_DIR / "modelo_camote.cbm"
-COLUMNAS_FILE = BASE_DIR / "columnas_modelo.json"
-RANGOS_FILE = BASE_DIR / "rangos_variables.json"
-METRICAS_FILE = BASE_DIR / "metricas_modelo.json"
-
-# IMPORTANTE:
-# El modelo fue entrenado con Producción_Total normalizada.
-# Estos valores corresponden al rango de la nueva base utilizada.
-# Si posteriormente guardas el rango del objetivo en JSON, el programa
-# lo utilizará automáticamente.
-TARGET_MIN = 0.0
-TARGET_MAX = 39228.0
-
-
-# =========================================================
-# 2. CARGA DE ARCHIVOS
-# =========================================================
-
-@st.cache_resource
-def cargar_modelo():
-    if not MODELO_FILE.exists():
-        raise FileNotFoundError(
-            f"No se encontró el modelo: {MODELO_FILE.name}"
-        )
-
-    modelo = CatBoostRegressor()
-    modelo.load_model(str(MODELO_FILE))
-    return modelo
-
-
-@st.cache_data
-def cargar_json(ruta):
-    if not ruta.exists():
-        raise FileNotFoundError(
-            f"No se encontró el archivo: {ruta.name}"
-        )
-
-    with open(ruta, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-try:
-    modelo = cargar_modelo()
-    columnas_modelo = cargar_json(COLUMNAS_FILE)
-    rangos = cargar_json(RANGOS_FILE)
-
-    if METRICAS_FILE.exists():
-        metricas = cargar_json(METRICAS_FILE)
-    else:
-        metricas = {}
-
-except Exception as e:
-    st.error(f"Error al cargar los archivos del modelo: {e}")
-    st.stop()
-
-
-# =========================================================
-# 3. VALIDACIÓN DE VARIABLES
-# =========================================================
-
-columnas_esperadas = [
-    "MesInicioPlantacion",
-    "DuracionPlantacion_dias",
-    "Fertilizante",
-    "Riego_Etapa1_mm",
-    "Riego_Etapa2_mm",
-    "Riego_Etapa3_mm",
-    "Temperatura_C",
-    "Precipitacion_mm",
-    "Humedad_porcentaje",
-    "Altitud_msnm",
-    "TipoSuelo",
-    "pH_Suelo"
+# ---------------------------------------------------------------------
+# 1. VARIABLES (Tabla 1 de la tesis): mínimo, ideal y máximo
+# ---------------------------------------------------------------------
+VARIABLES = [
+    # clave,                   nombre,                         unidad,  mín,  ideal,  máx,  paso
+    ("MesInicioPlantacion",     "Mes de inicio de plantación",  "mes",     1,    6,     12,   1),
+    ("DuracionPlantacion_dias", "Duración del cultivo",         "días",   60,   90,    120,   1),
+    ("Fertilizante",            "Fertilizante",                 "kg/ha",   0,   80,    100,   1),
+    ("Riego_Etapa1_mm",         "Riego en etapa inicial",       "mm",      0,   35,     60,   1),
+    ("Riego_Etapa2_mm",         "Riego en etapa intermedia",    "mm",      0,   45,     70,   1),
+    ("Riego_Etapa3_mm",         "Riego en etapa final",         "mm",      0,   55,     80,   1),
+    ("Temperatura_C",           "Temperatura",                  "°C",     10,   26,     40,   0.1),
+    ("Precipitacion_mm",        "Precipitación acumulada",      "mm",    200,  564,   1200,   1),
+    ("Humedad_porcentaje",      "Humedad relativa",             "%",      20,   70,    100,   1),
+    ("Altitud_msnm",            "Altitud del terreno",          "msnm",    0,  250,   1500,   1),
+    ("pH_Suelo",                "pH del suelo",                 "",        4,  6.5,      8,   0.1),
+    ("TipoSuelo",               "Tipo de suelo",                "",        1,    1,      3,   1),
 ]
+VAR = {v[0]: dict(zip(["clave", "nombre", "unidad", "min", "ideal", "max", "paso"], v)) for v in VARIABLES}
 
-faltantes = [
-    col for col in columnas_esperadas
-    if col not in columnas_modelo
-]
+MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+         "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+SUELOS = {1: "Franco", 2: "Arenoso", 3: "Arcilloso"}
+CLIMATICAS = ["Temperatura_C", "Humedad_porcentaje", "Precipitacion_mm", "Altitud_msnm"]
 
-if faltantes:
-    st.error(
-        "El modelo no contiene las variables esperadas: "
-        + ", ".join(faltantes)
-    )
-    st.stop()
-
-# Se respeta EXACTAMENTE el orden utilizado por el modelo.
-columnas_modelo = list(columnas_modelo)
-
-
-# =========================================================
-# 4. NOMBRES AMIGABLES
-# =========================================================
-
-nombres_amigables = {
-    "MesInicioPlantacion": "Mes de inicio de plantación",
-    "DuracionPlantacion_dias": "Duración del cultivo",
-    "Fertilizante": "Fertilizante",
-    "Riego_Etapa1_mm": "Riego en etapa inicial",
-    "Riego_Etapa2_mm": "Riego en etapa intermedia",
-    "Riego_Etapa3_mm": "Riego en etapa final",
-    "Temperatura_C": "Temperatura media",
-    "Precipitacion_mm": "Precipitación acumulada",
-    "Humedad_porcentaje": "Humedad relativa",
-    "Altitud_msnm": "Altitud del terreno",
-    "TipoSuelo": "Tipo de suelo",
-    "pH_Suelo": "pH del suelo"
-}
+# Función de cálculo de la tesis (Capítulo II): pesos y factores
+PESOS = {"DuracionPlantacion_dias": 0.09, "Temperatura_C": 0.12, "Precipitacion_mm": 0.06,
+         "Humedad_porcentaje": 0.05, "Fertilizante": 0.17, "Riego_Etapa1_mm": 0.14,
+         "Riego_Etapa2_mm": 0.16, "Riego_Etapa3_mm": 0.09, "pH_Suelo": 0.08, "Altitud_msnm": 0.04}
+F_MES = {1: 0.40, 2: 0.45, 3: 0.50, 4: 1.0, 5: 1.0, 6: 1.0, 7: 1.0, 8: 1.0, 9: 1.0,
+         10: 0.50, 11: 0.45, 12: 0.40}
+F_SUELO = {1: 1.00, 2: 0.85, 3: 0.75}
+UMBRAL_IDEAL = 0.90  # puntaje ≥ 0.90 → la variable se considera en su valor ideal (verde)
 
 
-def obtener_nombre_amigable(col):
-    return nombres_amigables.get(col, col)
+def valor_inicial(clave):
+    """Valor ideal con el tipo correcto (decimal o entero) para su barra."""
+    v = VAR[clave]
+    return float(v["ideal"]) if v["paso"] < 1 else int(v["ideal"])
 
 
-# =========================================================
-# 5. VALORES AGRONÓMICOS DE REFERENCIA
-# =========================================================
-
-valores_ideales = {
-    "MesInicioPlantacion": 6,
-    "DuracionPlantacion_dias": 90,
-    "Temperatura_C": 26,
-    "Precipitacion_mm": 564,
-    "Humedad_porcentaje": 70,
-    "Fertilizante": 80,
-    "Riego_Etapa1_mm": 35,
-    "Riego_Etapa2_mm": 45,
-    "Riego_Etapa3_mm": 55,
-    "TipoSuelo": 1,
-    "pH_Suelo": 6,
-    "Altitud_msnm": 250
-}
-
-rangos_ideales = {
-    "MesInicioPlantacion": [1, 12],
-    "DuracionPlantacion_dias": [60, 120],
-    "Temperatura_C": [10, 40],
-    "Precipitacion_mm": [200, 1200],
-    "Humedad_porcentaje": [20, 100],
-    "Fertilizante": [0, 100],
-    "Riego_Etapa1_mm": [0, 60],
-    "Riego_Etapa2_mm": [0, 70],
-    "Riego_Etapa3_mm": [0, 80],
-    "TipoSuelo": [1, 3],
-    "pH_Suelo": [4, 6],
-    "Altitud_msnm": [0, 1500]
-}
+def numero(valor):
+    """Número con separador de miles en punto y decimales con coma (formato Ecuador)."""
+    texto = f"{valor:,.1f}" if not float(valor).is_integer() else f"{valor:,.0f}"
+    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-# =========================================================
-# 6. NORMALIZACIÓN
-# =========================================================
+def acotar(valor, clave):
+    """Mantiene un valor dentro del rango [mínimo, máximo] de la variable."""
+    v = VAR[clave]
+    return min(max(valor, v["min"]), v["max"])
 
-def normalizar_variable(variable, valor):
-    """
-    Normaliza una variable mediante Min-Max:
-        x_norm = (x - min) / (max - min)
 
-    Debe coincidir con el procedimiento utilizado para generar
-    Data_Normalizada.csv.
-    """
+def puntaje(clave, valor):
+    """Puntuación de la tesis: 1 en el valor ideal y 0 en los extremos del rango."""
+    if clave == "MesInicioPlantacion":
+        return F_MES[int(valor)]
+    if clave == "TipoSuelo":
+        return F_SUELO[int(valor)]
+    if clave == "pH_Suelo":
+        if valor < 6:
+            return max(0.0, (valor - 4) / 2)
+        if valor <= 7:
+            return 1.0
+        return max(0.0, 8 - valor)
+    v = VAR[clave]
+    if valor <= v["ideal"]:
+        return max(0.0, (valor - v["min"]) / (v["ideal"] - v["min"]))
+    return max(0.0, (v["max"] - valor) / (v["max"] - v["ideal"]))
 
-    if variable not in rangos:
-        raise KeyError(
-            f"No existe información de rango para '{variable}'."
-        )
 
-    minimo = float(rangos[variable]["min"])
-    maximo = float(rangos[variable]["max"])
-
-    if maximo == minimo:
+def produccion_funcion_tesis(valores):
+    """Producción teórica según la función de cálculo de la tesis (sin ruido)."""
+    if valores["Riego_Etapa1_mm"] == 0 or valores["Riego_Etapa2_mm"] == 0:
         return 0.0
-
-    valor = float(valor)
-
-    valor_normalizado = (valor - minimo) / (maximo - minimo)
-
-    # Evita valores fuera del intervalo de entrenamiento.
-    valor_normalizado = max(0.0, min(1.0, valor_normalizado))
-
-    return valor_normalizado
+    s = sum(peso * puntaje(clave, valores[clave]) for clave, peso in PESOS.items())
+    return 40000 * s * F_MES[int(valores["MesInicioPlantacion"])] * F_SUELO[int(valores["TipoSuelo"])]
 
 
-def normalizar_entrada(entrada):
-    """
-    Convierte los valores introducidos en la aplicación a la misma
-    escala utilizada durante el entrenamiento del CatBoost.
-    """
-
-    fila = {}
-
-    for variable in columnas_modelo:
-        fila[variable] = normalizar_variable(
-            variable,
-            entrada[variable]
-        )
-
-    return pd.DataFrame(
-        [fila],
-        columns=columnas_modelo
-    )
+def es_ideal(clave, valor):
+    return puntaje(clave, valor) >= (1.0 if clave in ("MesInicioPlantacion", "TipoSuelo") else UMBRAL_IDEAL)
 
 
-# =========================================================
-# 7. DESNORMALIZAR PRODUCCIÓN
-# =========================================================
-
-def obtener_rango_objetivo():
-    """
-    Busca primero el rango de Producción_Total dentro de
-    rangos_variables.json. Si no existe, utiliza los valores
-    definidos arriba para la nueva base.
-    """
-
-    posibles_nombres = [
-        "Produccion_Total",
-        "Producción_Total",
-        "ProduccionTotal",
-        "y"
-    ]
-
-    for nombre in posibles_nombres:
-        if nombre in rangos:
-            if (
-                isinstance(rangos[nombre], dict)
-                and "min" in rangos[nombre]
-                and "max" in rangos[nombre]
-            ):
-                return (
-                    float(rangos[nombre]["min"]),
-                    float(rangos[nombre]["max"])
-                )
-
-    return TARGET_MIN, TARGET_MAX
+def texto_valor(clave, valor):
+    if clave == "MesInicioPlantacion":
+        return MESES[int(valor) - 1]
+    if clave == "TipoSuelo":
+        return SUELOS[int(valor)]
+    return f"{numero(valor)} {VAR[clave]['unidad']}".strip()
 
 
-def desnormalizar_produccion(valor_normalizado):
-    """
-    Convierte la predicción Min-Max nuevamente a kg/ha.
-    """
-
-    minimo, maximo = obtener_rango_objetivo()
-
-    return (
-        float(valor_normalizado) * (maximo - minimo)
-        + minimo
-    )
+def texto_limite(clave, valor):
+    """Valor sin unidad, para las columnas de la tabla."""
+    if clave in ("MesInicioPlantacion", "TipoSuelo"):
+        return texto_valor(clave, valor)
+    return numero(valor)
 
 
-# =========================================================
-# 8. GEOLOCALIZACIÓN + TEMPERATURA + ALTITUD
-# =========================================================
+# ---------------------------------------------------------------------
+# 2. MODELO CATBOOST Y ESTANDARIZACIÓN
+# ---------------------------------------------------------------------
+@st.cache_resource(show_spinner="Entrenando el modelo CatBoost…")
+def cargar_modelo():
+    """Entrena CatBoost exactamente como en el cuaderno de la tesis:
+    mismas 12 entradas, partición 80/20 (random_state=42) y mismos hiperparámetros."""
+    datos = pd.read_csv(ARCHIVO_DATOS)
+    X = datos.iloc[:, :12]
+    y = datos.iloc[:, -1]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    modelo = CatBoostRegressor(iterations=300, learning_rate=0.05, depth=6,
+                               loss_function="RMSE", random_seed=42, verbose=0)
+    modelo.fit(X_train, y_train)
+    pred = modelo.predict(X_test)
+    mse = mean_squared_error(y_test, pred)
+    metricas = {"r2": r2_score(y_test, pred), "mae": mean_absolute_error(y_test, pred),
+                "mse": mse, "rmse": float(np.sqrt(mse))}
+    with open(ARCHIVO_ESCALA, encoding="utf-8") as f:
+        escala = json.load(f)
+    escala["orden_entradas"] = list(X.columns)
+    escala["objetivo"] = datos.columns[-1]
+    escala["metricas"] = metricas
+    return modelo, escala
 
-@st.cache_data(ttl=600)
-def obtener_datos_ambientales(latitud, longitud):
-    """
-    Obtiene temperatura actual y elevación mediante Open-Meteo
-    utilizando las coordenadas proporcionadas por el dispositivo/navegador.
-    """
 
-    url = "https://api.open-meteo.com/v1/forecast"
+def estimar_produccion(modelo, escala, valores):
+    """Estandariza las entradas con la media y desviación del dataset original,
+    ejecuta CatBoost y devuelve la producción en kg/ha (transformación inversa)."""
+    fila = {c: (valores[c] - escala["media"][c]) / escala["desv"][c] for c in escala["orden_entradas"]}
+    entrada = pd.DataFrame([fila], columns=escala["orden_entradas"])
+    z = float(modelo.predict(entrada)[0])
+    objetivo = escala["objetivo"]
+    return max(0.0, z * escala["desv"][objetivo] + escala["media"][objetivo]), entrada
 
-    params = {
-        "latitude": latitud,
-        "longitude": longitud,
-        "current": "temperature_2m",
-        "elevation": latitud,
-        "timezone": "auto"
+
+# ---------------------------------------------------------------------
+# 3. DATOS DE LA WEB: ubicación, clima actual, lluvia acumulada y altitud
+# ---------------------------------------------------------------------
+@st.cache_data(ttl=900, show_spinner=False)
+def obtener_clima(lat, lon):
+    """Open-Meteo (gratuito, sin clave): temperatura y humedad actuales,
+    precipitación de los últimos 90 días y altitud del lugar."""
+    respuesta = requests.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={"latitude": lat, "longitude": lon,
+                "current": "temperature_2m,relative_humidity_2m",
+                "daily": "precipitation_sum", "past_days": 92, "forecast_days": 1,
+                "timezone": "auto"},
+        timeout=15)
+    respuesta.raise_for_status()
+    d = respuesta.json()
+    lluvia_diaria = [x or 0 for x in d["daily"]["precipitation_sum"][:-1]]  # sin el día de hoy
+    return {
+        "Temperatura_C": float(d["current"]["temperature_2m"]),
+        "Humedad_porcentaje": float(d["current"]["relative_humidity_2m"]),
+        "Precipitacion_mm": float(sum(lluvia_diaria[-DIAS_PRECIPITACION:])),
+        "Altitud_msnm": float(d.get("elevation", 0) or 0),
+        "hora": d["current"].get("time", ""),
     }
 
-    respuesta = requests.get(
-        url,
-        params=params,
-        timeout=15
-    )
 
-    respuesta.raise_for_status()
-
-    datos = respuesta.json()
-
-    temperatura = datos["current"]["temperature_2m"]
-
-    elevacion = datos.get("elevation")
-
-    return float(temperatura), float(elevacion)
-
-
-def detectar_ambiente():
-    """
-    Solicita la ubicación del dispositivo mediante el navegador.
-    """
-
-    ubicacion = streamlit_geolocation()
-
-    if not ubicacion:
-        return None
-
-    latitud = ubicacion.get("latitude")
-    longitud = ubicacion.get("longitude")
-
-    if latitud is None or longitud is None:
-        return None
-
+@st.cache_data(ttl=86400, show_spinner=False)
+def nombre_del_lugar(lat, lon):
     try:
-        temperatura, altitud = obtener_datos_ambientales(
-            float(latitud),
-            float(longitud)
-        )
-
-        return {
-            "latitud": float(latitud),
-            "longitud": float(longitud),
-            "temperatura": temperatura,
-            "altitud": altitud
-        }
-
-    except Exception as e:
-        st.warning(
-            "No fue posible obtener temperatura y altitud automáticamente: "
-            f"{e}"
-        )
-        return None
+        r = requests.get("https://nominatim.openstreetmap.org/reverse",
+                         params={"lat": lat, "lon": lon, "format": "json", "zoom": 10,
+                                 "accept-language": "es"},
+                         headers={"User-Agent": "app-prediccion-camote (tesis UTM)"}, timeout=10)
+        a = r.json().get("address", {})
+        partes = [a.get("city") or a.get("town") or a.get("village") or a.get("county"), a.get("state")]
+        return ", ".join(p for p in partes if p) or f"{lat:.3f}, {lon:.3f}"
+    except Exception:
+        return f"{lat:.3f}, {lon:.3f}"
 
 
-# =========================================================
-# 9. REGLAS AGRONÓMICAS
-# =========================================================
-
-def aplicar_regla_riego(entrada):
-    """
-    Si el riego de la etapa inicial o intermedia es 0,
-    la producción debe ser 0.
-
-        R1 = 0 OR R2 = 0
-        => Producción = 0
-    """
-
-    riego_1 = entrada["Riego_Etapa1_mm"]
-    riego_2 = entrada["Riego_Etapa2_mm"]
-
-    return riego_1 == 0 or riego_2 == 0
+# ---------------------------------------------------------------------
+# 4. ESTADO INICIAL DE LAS BARRAS (valores ideales por defecto)
+# ---------------------------------------------------------------------
+for clave in VAR:
+    st.session_state.setdefault(clave, valor_inicial(clave))
+st.session_state.setdefault("clima_aplicado_en", None)
 
 
-def clasificar_produccion(produccion):
-    if produccion >= 20000:
-        return "Producción alta estimada", "success"
-
-    elif produccion >= 10000:
-        return "Producción media estimada", "warning"
-
-    elif produccion > 0:
-        return "Producción baja estimada", "warning"
-
-    else:
-        return "Producción nula estimada", "error"
+def poner_valores_ideales():
+    for clave in VAR:
+        st.session_state[clave] = valor_inicial(clave)
 
 
-# =========================================================
-# 10. GRÁFICO DINÁMICO
-# =========================================================
-
-def normalizar_grafico(variable, valor):
-    """
-    Escala el valor a 0-100 exclusivamente para visualización.
-    No modifica el valor utilizado por el modelo.
-    """
-
-    if variable not in rangos:
-        return 0
-
-    minimo = float(rangos[variable]["min"])
-    maximo = float(rangos[variable]["max"])
-
-    if maximo == minimo:
-        return 0
-
-    resultado = (
-        (float(valor) - minimo)
-        / (maximo - minimo)
-    ) * 100
-
-    return max(0, min(100, resultado))
+def poner_datos_clima():
+    clima = st.session_state.get("clima_actual")
+    if clima:
+        for clave in CLIMATICAS:
+            paso = VAR[clave]["paso"]
+            valor = acotar(clima[clave], clave)
+            st.session_state[clave] = float(round(valor, 1)) if paso < 1 else int(round(valor))
 
 
-def crear_grafico_dinamico(entrada):
-
-    variables = []
-    valores = []
-    valores_norm = []
-    ideales_norm = []
-
-    for variable in columnas_modelo:
-
-        valor = entrada[variable]
-
-        # Para temperatura y altitud se muestra el valor detectado.
-        ideal = valores_ideales.get(
-            variable,
-            rangos[variable]["mean"]
-        )
-
-        variables.append(
-            obtener_nombre_amigable(variable)
-        )
-
-        valores.append(valor)
-
-        valores_norm.append(
-            normalizar_grafico(variable, valor)
-        )
-
-        ideales_norm.append(
-            normalizar_grafico(variable, ideal)
-        )
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Bar(
-            x=variables,
-            y=valores_norm,
-            name="Valores seleccionados",
-            text=[
-                f"{v:.1f}" if isinstance(v, float) else str(v)
-                for v in valores
-            ],
-            textposition="outside"
-        )
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=variables,
-            y=ideales_norm,
-            name="Valores ideales",
-            mode="lines+markers",
-            line=dict(width=4),
-            marker=dict(size=9)
-        )
-    )
-
-    fig.update_layout(
-        title="Comparación entre valores seleccionados e ideales",
-        xaxis_title="Variables del cultivo",
-        yaxis_title="Escala normalizada 0 - 100",
-        height=600,
-        template="plotly_white"
-    )
-
-    fig.update_xaxes(tickangle=45)
-
-    return fig
-
-
-# =========================================================
-# 11. INTERFAZ
-# =========================================================
-
-st.title(
-    "🌱 Prototipo para la estimación predictiva "
-    "de producción de camote"
-)
-
-st.subheader("NEXARING")
-
+# ---------------------------------------------------------------------
+# 5. ENCABEZADO
+# ---------------------------------------------------------------------
+st.title("🍠 Estimación de la producción de camote de pulpa anaranjada")
 st.markdown(
-    """
-    Esta aplicación estima la **Producción Total de camote**
-    mediante un modelo de inteligencia artificial basado en
-    **CatBoost Regressor**.
-    """
-)
+    "Prototipo del **modelo de simulación** desarrollado en la tesis de Maestría en Ciencia de Datos "
+    "y Máquinas de Aprendizaje (UTM). Estima la producción en **kg/ha** con el modelo **CatBoost**, "
+    "a partir de los rangos agronómicos definidos con el INIAP.")
 
+try:
+    modelo, escalador = cargar_modelo()
+except Exception:
+    st.error("No se encontraron los archivos **DataGauss_Normalizada.csv** y **escala_datos.json** "
+             "en el repositorio. Súbalos junto a app.py.")
+    st.stop()
 
-# =========================================================
-# 12. MÉTRICAS
-# =========================================================
-
-with st.expander("📊 Ver métricas del modelo"):
-
-    if metricas:
-
-        if "r2" in metricas:
-            st.write(
-                f"**R²:** {metricas['r2']:.4f}"
-            )
-
-        if "mae" in metricas:
-            st.write(
-                f"**MAE:** {metricas['mae']:.4f}"
-            )
-
-        if "mse" in metricas:
-            st.write(
-                f"**MSE:** {metricas['mse']:.4f}"
-            )
-
-        if "rmse" in metricas:
-            st.write(
-                f"**RMSE:** {metricas['rmse']:.4f}"
-            )
-
-    else:
-        st.info(
-            "No se encontró el archivo de métricas."
-        )
-
-
-# =========================================================
-# 13. DETECCIÓN AUTOMÁTICA DEL AMBIENTE
-# =========================================================
-
-st.markdown("## 🌎 Condiciones ambientales")
-
-st.info(
-    "La temperatura y la altitud se obtienen automáticamente "
-    "a partir de la ubicación autorizada por el dispositivo/navegador. "
-    "Se requiere conexión a Internet."
-)
-
-datos_ambientales = detectar_ambiente()
-
-if datos_ambientales:
-
-    st.session_state["temperatura_auto"] = (
-        datos_ambientales["temperatura"]
-    )
-
-    st.session_state["altitud_auto"] = (
-        datos_ambientales["altitud"]
-    )
-
-    st.success(
-        "Ubicación detectada correctamente."
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric(
-            "Temperatura actual",
-            f"{datos_ambientales['temperatura']:.1f} °C"
-        )
-
-    with col2:
-        st.metric(
-            "Altitud",
-            f"{datos_ambientales['altitud']:.0f} msnm"
-        )
-
-    with col3:
-        st.metric(
-            "Latitud",
-            f"{datos_ambientales['latitud']:.4f}"
-        )
-
+# ---------------------------------------------------------------------
+# 6. UBICACIÓN Y CLIMA
+# ---------------------------------------------------------------------
+st.subheader("🌎 Condiciones del lugar")
+ubicacion = get_geolocation()
+if ubicacion and "coords" in ubicacion:
+    lat, lon = ubicacion["coords"]["latitude"], ubicacion["coords"]["longitude"]
+    lugar = nombre_del_lugar(round(lat, 3), round(lon, 3))
+    origen = "ubicación del dispositivo"
 else:
+    lat, lon, lugar = PORTOVIEJO["lat"], PORTOVIEJO["lon"], PORTOVIEJO["nombre"]
+    origen = "ubicación predeterminada"
+    if ubicacion and "error" in ubicacion:
+        st.info("No se autorizó la ubicación del navegador; se usan los datos de Portoviejo. "
+                "Para usar su ubicación, permita el acceso en el navegador y recargue la página.")
 
-    st.warning(
-        "No se ha autorizado todavía la ubicación. "
-        "Permite el acceso a la ubicación en el navegador "
-        "para obtener automáticamente temperatura y altitud."
-    )
+try:
+    clima = obtener_clima(round(lat, 3), round(lon, 3))
+    st.session_state["clima_actual"] = clima
+    marca = f"{lat:.3f},{lon:.3f}"
+    if st.session_state["clima_aplicado_en"] != marca:   # se cargan una sola vez por lugar
+        poner_datos_clima()
+        st.session_state["clima_aplicado_en"] = marca
+except Exception:
+    clima = None
+    st.warning("No fue posible consultar el clima en la web. Las barras muestran los valores ideales "
+               "y pueden ajustarse manualmente.")
 
-    # Fallback para poder probar la aplicación.
-    if "temperatura_auto" not in st.session_state:
-        st.session_state["temperatura_auto"] = 26.0
+if clima:
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("📍 Lugar", lugar.split(",")[0], help=f"{lugar} ({origen})")
+    c2.metric("🌡️ Temperatura actual", f"{clima['Temperatura_C']:.1f} °C")
+    c3.metric("💧 Humedad relativa", f"{clima['Humedad_porcentaje']:.0f} %")
+    c4.metric(f"🌧️ Lluvia últimos {DIAS_PRECIPITACION} días", f"{clima['Precipitacion_mm']:.0f} mm")
+    c5.metric("⛰️ Altitud", f"{clima['Altitud_msnm']:.0f} msnm")
+    avisos = [f"{VAR[c]['nombre']}: {clima[c]:.0f} {VAR[c]['unidad']} está fuera del rango del modelo "
+              f"({VAR[c]['min']}–{VAR[c]['max']}); se usó el límite más cercano."
+              for c in CLIMATICAS if clima[c] != acotar(clima[c], c)]
+    for a in avisos:
+        st.caption("⚠️ " + a)
+    st.caption(f"Fuente: Open-Meteo · consulta {clima['hora'].replace('T', ' ')} hora local. "
+               "Estos valores se cargan en las barras, pero puede modificarlos manualmente.")
 
-    if "altitud_auto" not in st.session_state:
-        st.session_state["altitud_auto"] = 250.0
+b1, b2, _ = st.columns([1, 1, 2])
+b1.button("⭐ Valores ideales", on_click=poner_valores_ideales, use_container_width=True)
+b2.button("🌦️ Usar datos del clima", on_click=poner_datos_clima, use_container_width=True,
+          disabled=clima is None)
+
+# ---------------------------------------------------------------------
+# 7. BARRAS DE DESPLAZAMIENTO (entre el mínimo y el máximo de cada variable)
+# ---------------------------------------------------------------------
+st.subheader("🎚️ Variables independientes")
+grupos = {
+    "Agronómicas": ["MesInicioPlantacion", "DuracionPlantacion_dias", "Fertilizante",
+                    "Riego_Etapa1_mm", "Riego_Etapa2_mm", "Riego_Etapa3_mm"],
+    "Ambientales": ["Temperatura_C", "Precipitacion_mm", "Humedad_porcentaje", "Altitud_msnm"],
+    "Edáficas": ["pH_Suelo", "TipoSuelo"],
+}
+valores = {}
+for columna, (grupo, claves) in zip(st.columns(3), grupos.items()):
+    with columna:
+        st.markdown(f"**{grupo}**")
+        for clave in claves:
+            v = VAR[clave]
+            if clave == "MesInicioPlantacion":
+                valores[clave] = st.select_slider(v["nombre"], options=list(range(1, 13)),
+                                                  format_func=lambda m: MESES[m - 1], key=clave)
+            elif clave == "TipoSuelo":
+                valores[clave] = st.select_slider(v["nombre"], options=[1, 2, 3],
+                                                  format_func=lambda s: SUELOS[s], key=clave)
+            else:
+                decimal = v["paso"] < 1
+                etiqueta = f"{v['nombre']} ({v['unidad']})" if v["unidad"] else v["nombre"]
+                valores[clave] = st.slider(
+                    etiqueta,
+                    min_value=float(v["min"]) if decimal else int(v["min"]),
+                    max_value=float(v["max"]) if decimal else int(v["max"]),
+                    step=v["paso"], key=clave,
+                    help=f"Mínimo {v['min']} · ideal {v['ideal']} · máximo {v['max']}")
+
+# ---------------------------------------------------------------------
+# 8. TABLA DE VARIABLES: mínimo, ideal, máximo y valor actual
+# ---------------------------------------------------------------------
+st.subheader("📋 Rangos de las variables")
+tabla = pd.DataFrame([{
+    "Variable": VAR[c]["nombre"],
+    "Unidad": VAR[c]["unidad"] or "–",
+    "Mínimo": texto_limite(c, VAR[c]["min"]),
+    "Ideal": {"pH_Suelo": "6 – 7", "MesInicioPlantacion": "Abril – Septiembre"}.get(
+        c, texto_limite(c, VAR[c]["ideal"])),
+    "Máximo": texto_limite(c, VAR[c]["max"]),
+    "Valor actual": texto_valor(c, valores[c]),
+    "Estado": "🟢 Ideal" if es_ideal(c, valores[c]) else "🔴 Alejado del ideal",
+} for c in VAR])
+st.dataframe(tabla, hide_index=True, use_container_width=True)
+
+# ---------------------------------------------------------------------
+# 9. GRÁFICO EN TIEMPO REAL: verde = ideal, rojo = alejado del ideal
+# ---------------------------------------------------------------------
+st.subheader("📊 Comparación con los valores ideales")
 
 
-# =========================================================
-# 14. CONTROLES RÁPIDOS
-# =========================================================
-
-st.markdown("## ⚙️ Controles rápidos")
-
-col_a, col_b = st.columns(2)
-
-with col_a:
-    boton_ideales = st.button(
-        "⭐ Valores ideales",
-        use_container_width=True
-    )
-
-with col_b:
-    boton_promedios = st.button(
-        "🔄 Promedios del dataset",
-        use_container_width=True
-    )
+def posicion(clave, valor):
+    v = VAR[clave]
+    return (valor - v["min"]) / (v["max"] - v["min"]) * 100
 
 
-# =========================================================
-# 15. VALORES DE ENTRADA
-# =========================================================
+nombres = [VAR[c]["nombre"] for c in VAR]
+pos_actual = [posicion(c, valores[c]) for c in VAR]
+pos_ideal = [posicion(c, VAR[c]["ideal"]) for c in VAR]
+colores = ["#2e9e4f" if es_ideal(c, valores[c]) else "#d64545" for c in VAR]
 
-st.markdown("## 🧑‍🌾 Ingrese o ajuste los valores")
+grafico = go.Figure()
+grafico.add_bar(x=nombres, y=pos_actual, marker_color=colores, name="Valor ingresado",
+                text=[texto_valor(c, valores[c]) for c in VAR], textposition="outside",
+                hovertemplate="%{x}<br>%{text}<extra></extra>")
+grafico.add_scatter(x=nombres, y=pos_ideal, mode="lines+markers", name="Valor ideal",
+                    line=dict(color="#1b7f3b", width=3), marker=dict(size=9),
+                    text=[texto_valor(c, VAR[c]["ideal"]) for c in VAR],
+                    hovertemplate="%{x}<br>Ideal: %{text}<extra></extra>")
+grafico.add_scatter(x=[None], y=[None], mode="markers", name="Alejado del ideal",
+                    marker=dict(color="#d64545", size=12, symbol="square"))
+grafico.update_layout(height=480, yaxis=dict(title="Posición dentro del rango (%)", range=[0, 118]),
+                      xaxis=dict(tickangle=-35), legend=dict(orientation="h", y=1.12),
+                      margin=dict(t=40, b=10), template="plotly_white")
+st.plotly_chart(grafico, use_container_width=True)
+st.caption("Cada barra muestra dónde se ubica el valor entre el mínimo (0 %) y el máximo (100 %) de su rango. "
+           "La línea verde marca el valor ideal. La barra es verde cuando la variable está en su valor ideal "
+           f"(puntuación de la tesis ≥ {UMBRAL_IDEAL:.2f}; meses de abril a septiembre; suelo franco) "
+           "y roja cuando se aleja de él.")
 
-entrada_usuario = {}
-
-
-# ---------------------------------------------------------
-# Valores normales editables
-# ---------------------------------------------------------
-
-for variable in columnas_modelo:
-
-    # Temperatura y altitud se toman automáticamente.
-    if variable == "Temperatura_C":
-
-        entrada_usuario[variable] = (
-            st.session_state["temperatura_auto"]
-        )
-
-        st.number_input(
-            "🌡️ Temperatura media (obtenida automáticamente)",
-            value=float(
-                st.session_state["temperatura_auto"]
-            ),
-            disabled=True,
-            key="temperatura_visual"
-        )
-
-        continue
-
-    if variable == "Altitud_msnm":
-
-        entrada_usuario[variable] = (
-            st.session_state["altitud_auto"]
-        )
-
-        st.number_input(
-            "⛰️ Altitud del terreno (obtenida automáticamente)",
-            value=float(
-                st.session_state["altitud_auto"]
-            ),
-            disabled=True,
-            key="altitud_visual"
-        )
-
-        continue
-
-    minimo = int(
-        round(
-            rangos[variable]["min"]
-        )
-    )
-
-    maximo = int(
-        round(
-            rangos[variable]["max"]
-        )
-    )
-
-    if variable == "pH_Suelo":
-
-        valor_default = (
-            valores_ideales["pH_Suelo"]
-        )
-
-        entrada_usuario[variable] = st.slider(
-            "pH del suelo",
-            min_value=4.0,
-            max_value=7.5,
-            value=float(valor_default),
-            step=0.1
-        )
-
-    elif variable == "TipoSuelo":
-
-        entrada_usuario[variable] = st.selectbox(
-            "Tipo de suelo",
-            options=[1, 2, 3],
-            format_func=lambda x: {
-                1: "1 - Franco",
-                2: "2 - Arenoso",
-                3: "3 - Arcilloso"
-            }[x]
-        )
-
+# ---------------------------------------------------------------------
+# 10. ESTIMACIÓN DE LA PRODUCCIÓN CON CATBOOST
+# ---------------------------------------------------------------------
+st.subheader("🌱 Producción estimada")
+if st.button("🔍 Predecir producción", type="primary", use_container_width=True):
+    if valores["Riego_Etapa1_mm"] == 0 or valores["Riego_Etapa2_mm"] == 0:
+        produccion = 0.0
+        st.error("Sin riego en la etapa inicial o intermedia el cultivo se pierde "
+                 "(regla agronómica de la tesis): la producción es 0 kg/ha.")
+        entrada = None
     else:
+        produccion, entrada = estimar_produccion(modelo, escalador, valores)
 
-        valor_default = valores_ideales.get(
-            variable,
-            rangos[variable]["mean"]
-        )
+    r1, r2 = st.columns(2)
+    r1.metric("Producción estimada (CatBoost)", f"{numero(round(produccion))} kg/ha")
+    r2.metric("Equivalente", f"{numero(round(produccion / 1000, 1))} t/ha")
 
-        valor_default = max(
-            minimo,
-            min(
-                maximo,
-                int(round(valor_default))
-            )
-        )
+    alejadas = [VAR[c]["nombre"] for c in VAR if not es_ideal(c, valores[c])]
+    if alejadas:
+        st.info("Variables alejadas de su valor ideal: " + ", ".join(alejadas) + ".")
+    else:
+        st.success("Todas las variables están en su valor ideal.")
 
-        entrada_usuario[variable] = st.slider(
-            obtener_nombre_amigable(variable),
-            min_value=minimo,
-            max_value=maximo,
-            value=valor_default,
-            step=1
-        )
+    with st.expander("Ver detalle del cálculo"):
+        st.write("Producción según la función de cálculo de la tesis (sin ruido): "
+                 f"**{numero(round(produccion_funcion_tesis(valores)))} kg/ha**")
+        if entrada is not None:
+            st.write("Valores enviados al modelo (estandarizados con la media y desviación del dataset):")
+            st.dataframe(entrada, hide_index=True, use_container_width=True)
+        m = escalador.get("metricas", {})
+        if m:
+            st.write(f"Desempeño del modelo en el 20 % de prueba (escala estandarizada): "
+                     f"R² = {m['r2']:.4f} · MAE = {m['mae']:.4f} · MSE = {m['mse']:.4f} · RMSE = {m['rmse']:.4f}")
 
-
-# =========================================================
-# 16. TABLA DE VALORES
-# =========================================================
-
-with st.expander("🌿 Ver valores seleccionados"):
-
-    tabla = []
-
-    for variable in columnas_modelo:
-
-        tabla.append({
-            "Variable": obtener_nombre_amigable(variable),
-            "Valor seleccionado": entrada_usuario[variable]
-        })
-
-    st.dataframe(
-        pd.DataFrame(tabla),
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-# =========================================================
-# 17. GRÁFICO
-# =========================================================
-
-st.markdown("## 📊 Comparación gráfica")
-
-fig = crear_grafico_dinamico(
-    entrada_usuario
-)
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-st.caption(
-    "La escala 0-100 se utiliza únicamente para visualizar "
-    "variables con diferentes unidades. Los valores mostrados "
-    "corresponden a los valores reales ingresados."
-)
-
-
-# =========================================================
-# 18. PREDICCIÓN
-# =========================================================
-
-st.markdown("---")
-
-boton_predecir = st.button(
-    "🔍 Predecir producción",
-    use_container_width=True
-)
-
-
-if boton_predecir:
-
-    try:
-
-        # -------------------------------------------------
-        # REGLA AGRONÓMICA DEL RIEGO
-        # -------------------------------------------------
-
-        if aplicar_regla_riego(entrada_usuario):
-
-            produccion = 0.0
-
-            st.error(
-                "Producción nula estimada por déficit crítico "
-                "de riego en la etapa inicial o intermedia."
-            )
-
-            st.warning(
-                "De acuerdo con la regla agronómica: "
-                "si Riego_Etapa1_mm = 0 o "
-                "Riego_Etapa2_mm = 0, "
-                "Producción_Total = 0."
-            )
-
-        else:
-
-            # ---------------------------------------------
-            # NORMALIZAR ANTES DE ENVIAR AL MODELO
-            # ---------------------------------------------
-
-            entrada_normalizada = normalizar_entrada(
-                entrada_usuario
-            )
-
-            # ---------------------------------------------
-            # PREDICCIÓN DEL CATBOOST
-            # ---------------------------------------------
-
-            prediccion_normalizada = modelo.predict(
-                entrada_normalizada
-            )[0]
-
-            # ---------------------------------------------
-            # DESNORMALIZAR A KG/HA
-            # ---------------------------------------------
-
-            produccion = desnormalizar_produccion(
-                prediccion_normalizada
-            )
-
-            # Nunca permitir producción negativa.
-            produccion = max(
-                0.0,
-                produccion
-            )
-
-        # -------------------------------------------------
-        # CLASIFICACIÓN
-        # -------------------------------------------------
-
-        mensaje, tipo = clasificar_produccion(
-            produccion
-        )
-
-        if tipo == "success":
-            st.success(mensaje)
-
-        elif tipo == "warning":
-            st.warning(mensaje)
-
-        else:
-            st.error(mensaje)
-
-        # -------------------------------------------------
-        # RESULTADO
-        # -------------------------------------------------
-
-        st.metric(
-            "Producción estimada",
-            f"{produccion:,.2f} kg/ha"
-        )
-
-        st.info(
-            f"Equivalente aproximado: "
-            f"{produccion / 45.36:,.2f} quintales/ha "
-            "(1 quintal = 45,36 kg)."
-        )
-
-        # -------------------------------------------------
-        # DETALLE DEL VECTOR ENTRADA
-        # -------------------------------------------------
-
-        with st.expander(
-            "🔎 Ver datos utilizados por el modelo"
-        ):
-
-            st.write(
-                "Valores originales:"
-            )
-
-            st.dataframe(
-                pd.DataFrame(
-                    [entrada_usuario]
-                ),
-                use_container_width=True
-            )
-
-            st.write(
-                "Valores normalizados enviados al CatBoost:"
-            )
-
-            st.dataframe(
-                entrada_normalizada,
-                use_container_width=True
-            )
-
-    except Exception as e:
-
-        st.error(
-            "Se produjo un error durante la predicción."
-        )
-
-        st.exception(e)
-
-
-# =========================================================
-# 19. INFORMACIÓN FINAL
-# =========================================================
-
-st.markdown("---")
-
-st.caption(
-    "NEXARING — Sistema de estimación predictiva "
-    "de producción agrícola mediante inteligencia artificial."
-)
+st.divider()
+st.caption("⚠️ Prototipo con carácter demostrativo: el modelo se entrenó con datos sintéticos generados a partir "
+           "de rangos agronómicos del INIAP y aún no ha sido validado con datos de campo. "
+           f"© {datetime.now().year} · Néxar Lucas Ostaiza · UTM")
