@@ -23,7 +23,8 @@ from streamlit_js_eval import get_geolocation
 st.set_page_config(page_title="Producción de camote", page_icon="🍠", layout="wide")
 
 CARPETA = Path(__file__).resolve().parent
-ARCHIVO_DATOS = CARPETA / "DataGauss_Normalizada.csv"   # datos estandarizados (escenario B)
+# Datos estandarizados (escenario B). Se acepta también "DataGauss_Normalizada (1).csv", etc.
+ARCHIVO_DATOS = next(iter(sorted(CARPETA.glob("DataGauss_Normalizada*.csv"))), CARPETA / "DataGauss_Normalizada.csv")
 ARCHIVO_ESCALA = CARPETA / "escala_datos.json"           # media y desviación del dataset original
 
 PORTOVIEJO = {"lat": -1.0546, "lon": -80.4545, "nombre": "Portoviejo, Manabí (predeterminado)"}
@@ -40,12 +41,12 @@ VARIABLES = [
     ("Riego_Etapa1_mm",         "Riego en etapa inicial",       "mm",      0,   35,     60,   1),
     ("Riego_Etapa2_mm",         "Riego en etapa intermedia",    "mm",      0,   45,     70,   1),
     ("Riego_Etapa3_mm",         "Riego en etapa final",         "mm",      0,   55,     80,   1),
+    ("pH_Suelo",                "pH del suelo",                 "",        4,  6.5,      8,   0.1),
+    ("TipoSuelo",               "Tipo de suelo",                "",        1,    1,      3,   1),
     ("Temperatura_C",           "Temperatura",                  "°C",     10,   26,     40,   0.1),
     ("Precipitacion_mm",        "Precipitación acumulada",      "mm",    200,  564,   1200,   1),
     ("Humedad_porcentaje",      "Humedad relativa",             "%",      20,   70,    100,   1),
     ("Altitud_msnm",            "Altitud del terreno",          "msnm",    0,  250,   1500,   1),
-    ("pH_Suelo",                "pH del suelo",                 "",        4,  6.5,      8,   0.1),
-    ("TipoSuelo",               "Tipo de suelo",                "",        1,    1,      3,   1),
 ]
 VAR = {v[0]: dict(zip(["clave", "nombre", "unidad", "min", "ideal", "max", "paso"], v)) for v in VARIABLES}
 
@@ -61,7 +62,8 @@ PESOS = {"DuracionPlantacion_dias": 0.09, "Temperatura_C": 0.12, "Precipitacion_
 F_MES = {1: 0.40, 2: 0.45, 3: 0.50, 4: 1.0, 5: 1.0, 6: 1.0, 7: 1.0, 8: 1.0, 9: 1.0,
          10: 0.50, 11: 0.45, 12: 0.40}
 F_SUELO = {1: 1.00, 2: 0.85, 3: 0.75}
-UMBRAL_IDEAL = 0.90  # puntaje ≥ 0.90 → la variable se considera en su valor ideal (verde)
+UMBRAL_IDEAL = 0.90
+KG_POR_QUINTAL = 45.36  # puntaje ≥ 0.90 → la variable se considera en su valor ideal (verde)
 
 
 def valor_inicial(clave):
@@ -236,9 +238,12 @@ st.markdown(
 
 try:
     modelo, escalador = cargar_modelo()
-except Exception:
-    st.error("No se encontraron los archivos **DataGauss_Normalizada.csv** y **escala_datos.json** "
-             "en el repositorio. Súbalos junto a app.py.")
+except FileNotFoundError as error:
+    st.error(f"Falta un archivo en el repositorio: **{Path(error.filename).name}**. Súbalo junto a app.py.")
+    st.stop()
+except Exception as error:
+    st.error("No se pudo preparar el modelo. Envíe este mensaje a soporte:")
+    st.exception(error)
     st.stop()
 
 # ---------------------------------------------------------------------
@@ -294,15 +299,17 @@ b2.button("🌦️ Usar datos del clima", on_click=poner_datos_clima, use_contai
 # ---------------------------------------------------------------------
 st.subheader("🎚️ Variables independientes")
 grupos = {
-    "Agronómicas": ["MesInicioPlantacion", "DuracionPlantacion_dias", "Fertilizante",
-                    "Riego_Etapa1_mm", "Riego_Etapa2_mm", "Riego_Etapa3_mm"],
-    "Ambientales": ["Temperatura_C", "Precipitacion_mm", "Humedad_porcentaje", "Altitud_msnm"],
-    "Edáficas": ["pH_Suelo", "TipoSuelo"],
+    "🌱 Variables agronómicas": ["MesInicioPlantacion", "DuracionPlantacion_dias", "Fertilizante",
+                                "Riego_Etapa1_mm", "Riego_Etapa2_mm", "Riego_Etapa3_mm"],
+    "🟤 Variables edáficas (suelo)": ["pH_Suelo", "TipoSuelo"],
+    "🌦️ Variables ambientales": ["Temperatura_C", "Precipitacion_mm", "Humedad_porcentaje", "Altitud_msnm"],
 }
 valores = {}
-for columna, (grupo, claves) in zip(st.columns(3), grupos.items()):
-    with columna:
-        st.markdown(f"**{grupo}**")
+for grupo, claves in grupos.items():           # una barra debajo de otra
+    with st.container(border=True):
+        st.markdown(f"#### {grupo}")
+        if "ambientales" in grupo:
+            st.caption("Se cargan con los datos del clima de su ubicación; puede cambiarlos manualmente.")
         for clave in claves:
             v = VAR[clave]
             if clave == "MesInicioPlantacion":
@@ -385,9 +392,22 @@ if st.button("🔍 Predecir producción", type="primary", use_container_width=Tr
     else:
         produccion, entrada = estimar_produccion(modelo, escalador, valores)
 
-    r1, r2 = st.columns(2)
-    r1.metric("Producción estimada (CatBoost)", f"{numero(round(produccion))} kg/ha")
-    r2.metric("Equivalente", f"{numero(round(produccion / 1000, 1))} t/ha")
+    m = escalador["metricas"]
+    desv_kg = escalador["desv"][escalador["objetivo"]]       # desviación de la producción (kg/ha)
+    rmse_kg = m["rmse"] * desv_kg
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Producción estimada", f"{numero(round(produccion))} kg/ha")
+    r2.metric("En quintales", f"{numero(round(produccion / KG_POR_QUINTAL))} qq/ha")
+    if produccion > 0:
+        bajo, alto = max(0, produccion - rmse_kg), produccion + rmse_kg
+        r3.metric("Rango probable", f"{numero(round(bajo))} – {numero(round(alto))} kg/ha",
+                  help="Producción estimada ± el error típico del modelo (RMSE).")
+        st.info(f"🧑‍🌾 **Cómo leer este resultado:** con estas condiciones se esperan unos "
+                f"**{numero(round(produccion))} kg por hectárea** "
+                f"(≈ {numero(round(produccion / KG_POR_QUINTAL))} quintales). Lo más probable es que la "
+                f"producción esté entre **{numero(round(bajo))} y {numero(round(alto))} kg/ha**, porque el "
+                f"modelo suele equivocarse en ± {numero(round(rmse_kg))} kg/ha "
+                f"(≈ {numero(round(rmse_kg / produccion * 100, 1))} % de esta estimación).")
 
     alejadas = [VAR[c]["nombre"] for c in VAR if not es_ideal(c, valores[c])]
     if alejadas:
@@ -405,6 +425,46 @@ if st.button("🔍 Predecir producción", type="primary", use_container_width=Tr
         if m:
             st.write(f"Desempeño del modelo en el 20 % de prueba (escala estandarizada): "
                      f"R² = {m['r2']:.4f} · MAE = {m['mae']:.4f} · MSE = {m['mse']:.4f} · RMSE = {m['rmse']:.4f}")
+
+# ---------------------------------------------------------------------
+# 11. ¿QUÉ TAN CONFIABLE ES LA ESTIMACIÓN? (métricas traducidas al campo)
+# ---------------------------------------------------------------------
+st.subheader("📏 ¿Qué tan confiable es la estimación?")
+m = escalador["metricas"]
+desv_kg = escalador["desv"][escalador["objetivo"]]
+mae_kg, rmse_kg = m["mae"] * desv_kg, m["rmse"] * desv_kg
+media_kg = escalador["media"][escalador["objetivo"]]
+tabla_metricas = pd.DataFrame([
+    {"Métrica": "R² (coeficiente de determinación)",
+     "Valor del modelo": f"{m['r2']:.4f}",
+     "Equivalente en el campo": f"{numero(round(m['r2'] * 100, 1))} %",
+     "¿Qué significa para el agricultor?":
+         f"El modelo explica {round(m['r2'] * 100)} de cada 100 diferencias de producción entre una "
+         "condición y otra (mes de siembra, riego, suelo, clima). Mientras más cerca de 1, mejor."},
+    {"Métrica": "MAE (error absoluto medio)",
+     "Valor del modelo": f"{m['mae']:.4f}",
+     "Equivalente en el campo": f"± {numero(round(mae_kg))} kg/ha (≈ {numero(round(mae_kg / KG_POR_QUINTAL, 1))} qq/ha)",
+     "¿Qué significa para el agricultor?":
+         f"En promedio, la estimación se aleja unos {numero(round(mae_kg))} kg por hectárea, "
+         f"es decir, cerca del {numero(round(mae_kg / media_kg * 100, 1))} % de una cosecha promedio."},
+    {"Métrica": "MSE (error cuadrático medio)",
+     "Valor del modelo": f"{m['mse']:.4f}",
+     "Equivalente en el campo": "Se lee a través del RMSE",
+     "¿Qué significa para el agricultor?":
+         "Es el error elevado al cuadrado; sirve para comparar modelos entre sí. "
+         "Para el agricultor se usa su raíz cuadrada, que es el RMSE."},
+    {"Métrica": "RMSE (raíz del error cuadrático medio)",
+     "Valor del modelo": f"{m['rmse']:.4f}",
+     "Equivalente en el campo": f"± {numero(round(rmse_kg))} kg/ha (≈ {numero(round(rmse_kg / KG_POR_QUINTAL, 1))} qq/ha)",
+     "¿Qué significa para el agricultor?":
+         f"Error típico de la estimación, dando más peso a los errores grandes. Es el margen usado en el "
+         f"\"rango probable\". Como es parecido al MAE, el modelo casi no comete errores grandes."},
+])
+st.dataframe(tabla_metricas, hide_index=True, use_container_width=True)
+st.caption(f"Las métricas se calculan en escala estandarizada sobre el 20 % de los datos reservados para prueba; "
+           f"se convierten a kg/ha multiplicándolas por la desviación estándar de la producción "
+           f"({numero(round(desv_kg))} kg/ha). 1 quintal = {numero(KG_POR_QUINTAL)} kg. Estos errores miden cuánto "
+           "se aleja el modelo de la simulación basada en los criterios del INIAP, no de cosechas reales medidas en campo.")
 
 st.divider()
 st.caption("⚠️ Prototipo con carácter demostrativo: el modelo se entrenó con datos sintéticos generados a partir "
