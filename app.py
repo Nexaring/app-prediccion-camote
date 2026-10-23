@@ -332,17 +332,34 @@ for grupo, claves in grupos.items():           # una barra debajo de otra
 # 8. TABLA DE VARIABLES: mínimo, ideal, máximo y valor actual
 # ---------------------------------------------------------------------
 st.subheader("📋 Rangos de las variables")
+def estado(clave, valor):
+    """Ideal, o en qué dirección se aleja del valor ideal."""
+    if es_ideal(clave, valor):
+        return "🟢 Ideal"
+    if clave == "MesInicioPlantacion":
+        return "🔴 Antes de la época ideal" if valor < 4 else "🔴 Después de la época ideal"
+    if clave == "TipoSuelo":
+        return f"🔴 Suelo no ideal ({SUELOS[int(valor)].lower()})"
+    referencia = 6 if (clave == "pH_Suelo" and valor < 6) else (7 if clave == "pH_Suelo" else VAR[clave]["ideal"])
+    return "🔴 Por debajo del valor ideal" if valor < referencia else "🔴 Por encima del valor ideal"
+
+
+def rango(clave):
+    if clave == "TipoSuelo":
+        return "Franco, Arenoso, Arcilloso"
+    return f"{texto_limite(clave, VAR[clave]['min'])} – {texto_limite(clave, VAR[clave]['max'])}"
+
+
 tabla = pd.DataFrame([{
-    "Variable": VAR[c]["nombre"],
-    "Unidad": VAR[c]["unidad"] or "–",
-    "Mínimo": texto_limite(c, VAR[c]["min"]),
+    "Variable": f"{VAR[c]['nombre']} ({VAR[c]['unidad']})" if VAR[c]["unidad"] and c != "MesInicioPlantacion"
+                else VAR[c]["nombre"],
+    "Rango": rango(c),
     "Ideal": {"pH_Suelo": "6 – 7", "MesInicioPlantacion": "Abril – Septiembre"}.get(
         c, texto_limite(c, VAR[c]["ideal"])),
-    "Máximo": texto_limite(c, VAR[c]["max"]),
-    "Valor actual": texto_valor(c, valores[c]),
-    "Estado": "🟢 Ideal" if es_ideal(c, valores[c]) else "🔴 Alejado del ideal",
+    "Valor actual": texto_limite(c, valores[c]),
+    "Estado": estado(c, valores[c]),
 } for c in VAR])
-st.dataframe(tabla, hide_index=True, use_container_width=True)
+st.dataframe(tabla, hide_index=True, use_container_width=True, height=36 * (len(tabla) + 1) + 3)
 
 # ---------------------------------------------------------------------
 # 9. GRÁFICO EN TIEMPO REAL: verde = ideal, rojo = alejado del ideal
@@ -433,32 +450,16 @@ st.subheader("📏 ¿Qué tan confiable es la estimación?")
 m = escalador["metricas"]
 desv_kg = escalador["desv"][escalador["objetivo"]]
 mae_kg, rmse_kg = m["mae"] * desv_kg, m["rmse"] * desv_kg
-media_kg = escalador["media"][escalador["objetivo"]]
 tabla_metricas = pd.DataFrame([
     {"Métrica": "R² (coeficiente de determinación)",
-     "Valor del modelo": f"{m['r2']:.4f}",
-     "Equivalente en el campo": f"{numero(round(m['r2'] * 100, 1))} %",
-     "¿Qué significa para el agricultor?":
-         f"El modelo explica {round(m['r2'] * 100)} de cada 100 diferencias de producción entre una "
-         "condición y otra (mes de siembra, riego, suelo, clima). Mientras más cerca de 1, mejor."},
+     "Equivalente en el campo": f"Explica el {numero(round(m['r2'] * 100, 1))} % de las diferencias de producción "
+                                "entre una condición y otra"},
     {"Métrica": "MAE (error absoluto medio)",
-     "Valor del modelo": f"{m['mae']:.4f}",
-     "Equivalente en el campo": f"± {numero(round(mae_kg))} kg/ha (≈ {numero(round(mae_kg / KG_POR_QUINTAL, 1))} qq/ha)",
-     "¿Qué significa para el agricultor?":
-         f"En promedio, la estimación se aleja unos {numero(round(mae_kg))} kg por hectárea, "
-         f"es decir, cerca del {numero(round(mae_kg / media_kg * 100, 1))} % de una cosecha promedio."},
-    {"Métrica": "MSE (error cuadrático medio)",
-     "Valor del modelo": f"{m['mse']:.4f}",
-     "Equivalente en el campo": "Se lee a través del RMSE",
-     "¿Qué significa para el agricultor?":
-         "Es el error elevado al cuadrado; sirve para comparar modelos entre sí. "
-         "Para el agricultor se usa su raíz cuadrada, que es el RMSE."},
+     "Equivalente en el campo": f"± {numero(round(mae_kg))} kg/ha (≈ {numero(round(mae_kg / KG_POR_QUINTAL, 1))} "
+                                f"qq/ha) de error promedio"},
     {"Métrica": "RMSE (raíz del error cuadrático medio)",
-     "Valor del modelo": f"{m['rmse']:.4f}",
-     "Equivalente en el campo": f"± {numero(round(rmse_kg))} kg/ha (≈ {numero(round(rmse_kg / KG_POR_QUINTAL, 1))} qq/ha)",
-     "¿Qué significa para el agricultor?":
-         f"Error típico de la estimación, dando más peso a los errores grandes. Es el margen usado en el "
-         f"\"rango probable\". Como es parecido al MAE, el modelo casi no comete errores grandes."},
+     "Equivalente en el campo": f"± {numero(round(rmse_kg))} kg/ha (≈ {numero(round(rmse_kg / KG_POR_QUINTAL, 1))} "
+                                f"qq/ha) de error típico; es el margen del \"rango probable\""},
 ])
 st.dataframe(tabla_metricas, hide_index=True, use_container_width=True)
 st.caption(f"Las métricas se calculan en escala estandarizada sobre el 20 % de los datos reservados para prueba; "
